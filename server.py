@@ -201,62 +201,121 @@ def index():
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <meta http-equiv="Cache-Control" content="no-store" />
   <style>
-    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif; margin: 2rem; }
-    .wrap { max-width: 880px; margin: 0 auto; }
-    label { font-weight: 600; display: block; margin-top: 1rem; }
-    input, select { width: 100%; padding: .6rem .7rem; font-size: 1rem; border: 1px solid #ccc; border-radius: 8px; }
-    button { margin-top: 1rem; padding: .7rem 1rem; font-size: 1rem; border: 0; border-radius: 8px; cursor: pointer; }
-    .primary { background: #0066ff; color: white; }
+    :root {
+      --bg: #f1f5f9; /* slate-100: soft gray-blue */
+      --card: #ffffff;
+      --card-2: #f8fbff;
+      --text: #0f172a;   /* slate-900 */
+      --muted: #475569;  /* slate-600 */
+      --primary: #2563eb;   /* blue-600 */
+      --primary-2: #1e40af; /* blue-800 */
+      --ring: rgba(37, 99, 235, .25);
+      --border: #e5e7eb;
+      --success: #16a34a; /* green-600 */
+      --label: #1e40af; /* blue-800 */
+    }
+    * { box-sizing: border-box; }
+    html, body { height: 100%; }
+    body {
+      font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif;
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+    }
+    .wrap { max-width: 900px; margin: 0 auto; padding: 2rem; }
+    header.hero { display: flex; align-items: center; gap: 1rem; margin: 1rem 0 1.5rem 0; }
+    /* logo removed */
+    h1 { font-size: 1.6rem; margin: 0; letter-spacing: .1px; color: var(--primary); }
+    .subtitle { color: #334155; margin-top: .25rem; font-size: .98rem; }
+    .card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      box-shadow: 0 6px 18px rgba(2, 6, 23, .06);
+      padding: 1.25rem;
+    }
     .row { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
-    .hint { color: #666; font-size: .9rem; }
-    .note { margin-top: .5rem; }
-    .footer { margin-top: 2rem; color: #777; font-size: .9rem; }
-
+    @media (max-width: 720px) { .row { grid-template-columns: 1fr; } }
+    label { font-weight: 600; display: block; margin-top: .5rem; color: var(--label); }
+    .hint { color: var(--muted); font-size: .92rem; }
+    .note { margin-top: .4rem; }
+    a { color: var(--primary-2); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    code { color: var(--primary-2); background: #eff6ff; padding: .1rem .35rem; border-radius: 6px; }
+    input, select {
+      width: 100%; margin-top: .5rem; padding: .75rem .85rem;
+      font-size: 1rem; color: var(--text);
+      background: #ffffff; border: 1px solid var(--border); border-radius: 10px;
+      outline: none; transition: border-color .15s ease, box-shadow .15s ease, background .15s ease;
+    }
+    input::placeholder { color: #94a3b8; }
+    input:focus, select:focus { border-color: var(--primary); box-shadow: 0 0 0 4px var(--ring); }
+    .actions { display: flex; align-items: center; gap: .75rem; flex-wrap: wrap; margin-top: 1rem; }
+    button { padding: .8rem 1rem; font-size: 1rem; border: 0; border-radius: 10px; cursor: pointer; transition: background .15s ease, box-shadow .15s ease; }
+    .primary { background: var(--primary); color: white; box-shadow: none; }
+    .primary:hover { background: #1d4ed8; }
+    .primary:active { background: #1e40af; }
+    .ghost { background: transparent; color: var(--muted); border: 1px dashed var(--border); }
+    .footer { margin-top: 1.25rem; color: #1e40af; font-size: .92rem; }
     /* Progress bar */
-    .progress { margin-top: 1rem; height: 10px; width: 100%; background: #eee; border-radius: 999px; overflow: hidden; display: none; }
-    .progress-bar { height: 100%; width: 0%; background: linear-gradient(90deg, #4c8eff, #0066ff); transition: width .2s ease; }
-    .progress-text { margin-top: .5rem; color: #555; font-size: .9rem; display: none; }
+    .progress { margin-top: 1rem; height: 12px; width: 100%; background: #dbeafe; border: 1px solid #bfdbfe; border-radius: 999px; overflow: hidden; display: none; }
+    .progress-bar { height: 100%; width: 0%; background: #2563eb; box-shadow: none; transition: width .2s ease; }
+    .progress-text { margin-top: .6rem; color: #1e40af; font-size: .92rem; display: none; }
   </style>
 </head>
 <body>
   <div class="wrap">
-    <h1>ACS 5-year Downloader - Chatham County, GA</h1>
-    <p class="hint">Enter ACS table IDs like B01001 B19013, choose geography, and download a CSV.</p>
-
-    <label>ACS Years</label>
-    <input id="years" type="text" value="2023" placeholder="e.g., 2018-2023 or 2018,2020,2023" />
-
-    <div class="row">
+    <header class="hero">
       <div>
-        <label>Geography</label>
-        <select id="geo">
-          <option>county</option>
-          <option>tract</option>
-          <option>block group</option>
-        </select>
+        <h1>ACS 5-year Downloader · Chatham County, GA</h1>
+        <div class="subtitle">Enter ACS tables (e.g., B01001 B19013), choose geography and years, then download.</div>
       </div>
-      <div>
-        <label>Include MOE</label>
-        <select id="moe">
-          <option value="false" selected>No</option>
-          <option value="true">Yes</option>
-        </select>
+    </header>
+
+    <div class="card">
+      <div class="row">
+        <div>
+          <label>ACS Years</label>
+          <input id="years" type="text" value="2023" placeholder="2018-2023 or 2018,2020,2023" />
+        </div>
+        <div>
+          <label>Geography</label>
+          <select id="geo">
+            <option>county</option>
+            <option>tract</option>
+            <option>block group</option>
+          </select>
+        </div>
       </div>
+
+      <div class="row">
+        <div>
+          <label>Include MOE</label>
+          <select id="moe">
+            <option value="false" selected>No</option>
+            <option value="true">Yes</option>
+          </select>
+        </div>
+        <div>
+          <label>Census API key <span class="hint">(optional)</span></label>
+          <input id="apikey" type="password" value="1f9fd90d5bd516181c8cbc907122204225f71b35" />
+        </div>
+      </div>
+
+      <label>ACS table IDs</label>
+      <input id="tables" type="text" value="B01001 B19013" />
+      <div class="note hint">Separate with spaces or commas. Examples: <code>B01001 B19013</code> or <code>B01001,B19013</code></div>
+
+      <div class="actions">
+        <button class="primary" onclick="download()">Download CSV</button>
+        <span class="hint">CSV for one year or ZIP for a range.</span>
+      </div>
+
+      <div id="progress" class="progress"><div class="progress-bar" id="progressbar"></div></div>
+      <div id="progresstext" class="progress-text">Working...</div>
+
+      <div id="msg" class="footer"></div>
     </div>
-
-    <label>ACS table IDs</label>
-    <input id="tables" type="text" value="B01001 B19013" />
-    <div class="note hint">Separate with spaces or commas.</div>
-
-    <label>Census API key <span class="hint">(optional)</span></label>
-    <input id="apikey" type="password" value="1f9fd90d5bd516181c8cbc907122204225f71b35" />
-
-    <button class="primary" onclick="download()">Download CSV</button>
-
-    <div id="progress" class="progress"><div class="progress-bar" id="progressbar"></div></div>
-    <div id="progresstext" class="progress-text">Working...</div>
-
-    <div id="msg" class="footer"></div>
   </div>
 
   <script>
@@ -353,3 +412,7 @@ def index():
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=8000)
+
+@app.get("/healthz")
+def healthz():
+    return "ok", 200
