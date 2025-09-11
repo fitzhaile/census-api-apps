@@ -478,7 +478,8 @@ def index():
     <div class="card">
       <h1>ACS Data Downloader (5-yr)</h1>
       <p class="subtitle">Get Census 5-year
-average data for Georgia counties<br>Tokens: <code>B01001</code> (totals), <code>B01001_003</code> (specific), <code>B01001_*</code> (full table)</p>
+average data for Georgia counties<br>
+Tokens: <code>B01001</code> (totals), <code>B01001_003</code> (specific), <code>B01001_*</code> (full table)</p>
       
       <div class="form-group">
         <label>County</label>
