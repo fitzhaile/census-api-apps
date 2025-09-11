@@ -20,15 +20,59 @@ def fetch_variables_metadata(year: int):
     return r.json().get("variables", {})
 
 def list_table_variables(variables_meta, table_id: str, include_moe: bool):
+    """
+    Legacy behavior: returns ALL variables for the given table (e.g., B01001_*E [+M]).
+    """
     table_id = table_id.upper().strip()
     out = []
-    for var_name, meta in variables_meta.items():
+    for var_name in variables_meta.keys():
         if not var_name.startswith(table_id + "_"):
             continue
         if var_name.endswith("E") or (include_moe and var_name.endswith("M")):
             out.append(var_name)
     out.sort()
     return out
+
+def resolve_requested_variables(variables_meta, tokens, include_moe: bool):
+    """
+    Interpret user tokens with sensible rules:
+    - "B01001" => only total (_001E [+M])
+    - "B01001_*" => entire table (all E [+M])
+    - "B01001_003" => specific line (E [+M])
+    """
+    resolved = []
+    for raw in tokens:
+        token = raw.upper().strip()
+        if not token:
+            continue
+        # whole table wildcard
+        if token.endswith('*'):
+            base = token[:-1].rstrip('_')
+            resolved.extend(list_table_variables(variables_meta, base, include_moe))
+            continue
+        # specific line
+        if '_' in token:
+            base = token
+            e = base + 'E'
+            if e in variables_meta:
+                resolved.append(e)
+            if include_moe:
+                m = base + 'M'
+                if m in variables_meta:
+                    resolved.append(m)
+            continue
+        # bare table => only _001
+        base = f"{token}_001"
+        e = base + 'E'
+        if e in variables_meta:
+            resolved.append(e)
+        if include_moe:
+            m = base + 'M'
+            if m in variables_meta:
+                resolved.append(m)
+    # unique and sorted for stability
+    resolved = sorted(set(resolved))
+    return resolved
 
 def chunk(lst, n):
     return [lst[i:i+n] for i in range(0, len(lst), n)]
@@ -78,9 +122,7 @@ def parse_years(value, default=2023):
 
 def build_csv_for_year(year, geo, tables, include_moe, api_key):
     variables_meta = fetch_variables_metadata(year)
-    vars_all = set()
-    for t in tables:
-        vars_all.update(list_table_variables(variables_meta, t, include_moe))
+    vars_all = set(resolve_requested_variables(variables_meta, tables, include_moe))
     if not vars_all:
         raise ValueError(f"No variables found for the requested tables in {year}")
 
@@ -121,11 +163,23 @@ def build_csv_for_year(year, geo, tables, include_moe, api_key):
     var_fields = sorted([h for h in headers_all if h not in geo_fields + ["NAME"]])
     fieldnames = geo_fields + ["NAME"] + var_fields
 
+    # Build human-friendly labels for variable columns
+    def pretty_label(var: str) -> str:
+        meta = variables_meta.get(var, {})
+        label = meta.get("label") or var
+        try:
+            label = str(label)
+        except Exception:
+            label = var
+        return f"{label} ({var})"
+
+    header_display = geo_fields + ["NAME"] + [pretty_label(v) for v in var_fields]
+
     buf = io.StringIO()
-    w = csv.DictWriter(buf, fieldnames=fieldnames)
-    w.writeheader()
+    w = csv.writer(buf)
+    w.writerow(header_display)
     for rec in rows_index.values():
-        w.writerow({k: rec.get(k, "") for k in fieldnames})
+        w.writerow([rec.get(k, "") for k in fieldnames])
     csv_bytes = buf.getvalue().encode("utf-8")
     mem = io.BytesIO(csv_bytes)
     mem.seek(0)
@@ -159,9 +213,7 @@ def download():
     for y in years:
         try:
             variables_meta = fetch_variables_metadata(y)
-            vars_all = set()
-            for t in tables:
-                vars_all.update(list_table_variables(variables_meta, t, include_moe))
+            vars_all = set(resolve_requested_variables(variables_meta, tables, include_moe))
             if not vars_all:
                 bad_years.append(y)
         except Exception:
@@ -268,7 +320,7 @@ def index():
     <header class="hero">
       <div>
         <h1>ACS 5-year Downloader · Chatham County, GA</h1>
-        <div class="subtitle">Enter ACS tables (e.g., B01001 B19013), choose geography and years, then download.</div>
+        <div class="subtitle">Tokens: <code>B01001</code> (totals only), <code>B01001_003</code> (specific), <code>B01001_*</code> (entire table).</div>
       </div>
     </header>
 
@@ -304,7 +356,7 @@ def index():
 
       <label>ACS table IDs</label>
       <input id="tables" type="text" value="B01001 B19013" />
-      <div class="note hint">Separate with spaces or commas. Examples: <code>B01001 B19013</code> or <code>B01001,B19013</code></div>
+      <div class="note hint">Separate with spaces or commas. Examples: <code>B01001</code>, <code>B19013</code>, <code>B01001_003</code>, <code>B01001_*</code></div>
 
       <div class="actions">
         <button class="primary" onclick="download()">Download CSV</button>
@@ -413,6 +465,7 @@ def index():
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=8000)
 
+# Render config health check
 @app.get("/healthz")
 def healthz():
     return "ok", 200
