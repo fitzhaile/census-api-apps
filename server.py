@@ -6,7 +6,15 @@ app = Flask(__name__)
 CENSUS_BASE = "https://api.census.gov/data"
 DATASET = "acs/acs5"
 STATE_FIPS = "13"
-COUNTY_FIPS = "051"
+
+# Georgia county FIPS codes
+COUNTIES = {
+    "Chatham": "051",
+    "Liberty": "179", 
+    "Bryan": "029",
+    "Effingham": "103"
+}
+DEFAULT_COUNTY = "Chatham"
 DEFAULT_API_KEY = os.environ.get("CENSUS_API_KEY", "1f9fd90d5bd516181c8cbc907122204225f71b35")
 
 # Directory to persist generated CSV files
@@ -77,13 +85,14 @@ def resolve_requested_variables(variables_meta, tokens, include_moe: bool):
 def chunk(lst, n):
     return [lst[i:i+n] for i in range(0, len(lst), n)]
 
-def build_geo_params(geo):
+def build_geo_params(geo, county_name=None):
+    county_fips = COUNTIES.get(county_name or DEFAULT_COUNTY, COUNTIES[DEFAULT_COUNTY])
     if geo == "county":
-        return {"for": f"county:{COUNTY_FIPS}", "in": f"state:{STATE_FIPS}"}
+        return {"for": f"county:{county_fips}", "in": f"state:{STATE_FIPS}"}
     if geo == "tract":
-        return {"for": "tract:*", "in": f"state:{STATE_FIPS} county:{COUNTY_FIPS}"}
+        return {"for": "tract:*", "in": f"state:{STATE_FIPS} county:{county_fips}"}
     if geo == "block group":
-        return {"for": "block group:*", "in": f"state:{STATE_FIPS} county:{COUNTY_FIPS} tract:*"}
+        return {"for": "block group:*", "in": f"state:{STATE_FIPS} county:{county_fips} tract:*"}
     raise ValueError("Invalid geo")
 
 def parse_years(value, default=2023):
@@ -120,14 +129,14 @@ def parse_years(value, default=2023):
     except Exception:
         return [default]
 
-def build_csv_for_year(year, geo, tables, include_moe, api_key):
+def build_csv_for_year(year, geo, tables, include_moe, api_key, county_name=None):
     variables_meta = fetch_variables_metadata(year)
     vars_all = set(resolve_requested_variables(variables_meta, tables, include_moe))
     if not vars_all:
         raise ValueError(f"No variables found for the requested tables in {year}")
 
     batches = chunk(sorted(vars_all), 45)
-    geo_params = build_geo_params(geo)
+    geo_params = build_geo_params(geo, county_name)
 
     headers_all = None
     rows_index = {}
@@ -183,7 +192,8 @@ def build_csv_for_year(year, geo, tables, include_moe, api_key):
     csv_bytes = buf.getvalue().encode("utf-8")
     mem = io.BytesIO(csv_bytes)
     mem.seek(0)
-    filename = f"chatham_acs_{geo}_{year}.csv"
+    county_slug = (county_name or DEFAULT_COUNTY).lower().replace(" ", "_")
+    filename = f"{county_slug}_acs_{geo}_{year}.csv"
 
     # Persist to disk under csv-downloads
     try:
@@ -201,6 +211,7 @@ def download():
     payload = request.get_json(force=True)
     years = parse_years(payload.get("years", payload.get("year", 2023)))
     geo = payload.get("geo", "county")
+    county = payload.get("county", DEFAULT_COUNTY)
     tables = [t.strip() for t in payload.get("tables", "").replace(",", " ").split() if t.strip()]
     include_moe = bool(payload.get("include_moe", False))
     api_key = payload.get("api_key") or DEFAULT_API_KEY or None
@@ -224,7 +235,7 @@ def download():
     # Single year behaves as before (single CSV)
     if len(years) == 1:
         try:
-            filename, mem = build_csv_for_year(years[0], geo, tables, include_moe, api_key)
+            filename, mem = build_csv_for_year(years[0], geo, tables, include_moe, api_key, county)
             return send_file(mem, mimetype="text/csv", as_attachment=True, download_name=filename)
         except Exception as e:
             return jsonify({"error": f"Failed to build CSV for {years[0]}: {e}"}), 502
@@ -234,10 +245,11 @@ def download():
     try:
         with zipfile.ZipFile(zip_mem, mode='w', compression=zipfile.ZIP_DEFLATED) as zf:
             for y in years:
-                fname, mem = build_csv_for_year(y, geo, tables, include_moe, api_key)
+                fname, mem = build_csv_for_year(y, geo, tables, include_moe, api_key, county)
                 zf.writestr(fname, mem.read())
         zip_mem.seek(0)
-        zip_name = f"chatham_acs_{geo}_{years[0]}-{years[-1]}.zip"
+        county_slug = county.lower().replace(" ", "_")
+        zip_name = f"{county_slug}_acs_{geo}_{years[0]}-{years[-1]}.zip"
         return send_file(zip_mem, mimetype="application/zip", as_attachment=True, download_name=zip_name)
     except Exception as e:
         return jsonify({"error": f"Failed to build ZIP: {e}"}), 502
@@ -289,6 +301,7 @@ def index():
     .row { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
     @media (max-width: 720px) { .row { grid-template-columns: 1fr; } }
     label { font-weight: 600; display: block; margin-top: .5rem; color: var(--label); }
+    .spaced-label { margin-top: 2rem; }
     .hint { color: var(--muted); font-size: .92rem; }
     .note { margin-top: .4rem; }
     a { color: var(--primary-2); text-decoration: none; }
@@ -319,7 +332,7 @@ def index():
   <div class="wrap">
     <header class="hero">
       <div>
-        <h1>ACS 5-year Downloader · Chatham County, GA</h1>
+        <h1>ACS 5-year Downloader</h1>
         <div class="subtitle">Tokens: <code>B01001</code> (totals only), <code>B01001_003</code> (specific), <code>B01001_*</code> (entire table).</div>
       </div>
     </header>
@@ -327,34 +340,40 @@ def index():
     <div class="card">
       <div class="row">
         <div>
-          <label>ACS Years</label>
-          <input id="years" type="text" value="2023" placeholder="2018-2023 or 2018,2020,2023" />
+          <label>County</label>
+          <select id="county">
+            <option value="Chatham">Chatham</option>
+            <option value="Liberty">Liberty</option>
+            <option value="Bryan">Bryan</option>
+            <option value="Effingham">Effingham</option>
+          </select>
         </div>
         <div>
           <label>Geography</label>
           <select id="geo">
-            <option>county</option>
-            <option>tract</option>
-            <option>block group</option>
+            <option value="county">County</option>
+            <option value="tract">Tract</option>
+            <option value="block group">Block Group</option>
           </select>
         </div>
       </div>
 
       <div class="row">
         <div>
-          <label>Include MOE</label>
+          <label class="spaced-label">ACS Years</label>
+          <input id="years" type="text" value="2023" placeholder="2018-2023 or 2018,2020,2023" />
+        </div>
+        <div>
+          <label class="spaced-label">Include MOE</label>
           <select id="moe">
             <option value="false" selected>No</option>
             <option value="true">Yes</option>
           </select>
         </div>
-        <div>
-          <label>Census API key <span class="hint">(optional)</span></label>
-          <input id="apikey" type="password" value="1f9fd90d5bd516181c8cbc907122204225f71b35" />
-        </div>
       </div>
 
-      <label>ACS table IDs</label>
+
+      <label class="spaced-label">ACS table IDs</label>
       <input id="tables" type="text" value="B01001 B19013" />
       <div class="note hint">Separate with spaces or commas. Examples: <code>B01001</code>, <code>B19013</code>, <code>B01001_003</code>, <code>B01001_*</code></div>
 
@@ -395,9 +414,10 @@ def index():
     async function download() {
       const years = document.getElementById('years')?.value;
       const geo = document.getElementById('geo')?.value;
+      const county = document.getElementById('county')?.value;
       const moe = document.getElementById('moe')?.value === 'true';
       const tables = document.getElementById('tables')?.value;
-      const apikey = document.getElementById('apikey')?.value || undefined;
+      const apikey = undefined; // Use default API key
 
       const msg = document.getElementById('msg');
       if (msg) msg.textContent = '';
@@ -415,7 +435,7 @@ def index():
         const res = await fetch('/api/download', {
           method: 'POST',
           headers: {'Content-Type':'application/json'},
-          body: JSON.stringify({ years, geo, tables, include_moe: moe, api_key: apikey })
+          body: JSON.stringify({ years, geo, county, tables, include_moe: moe, api_key: apikey })
         });
 
         if (!res.ok) {
