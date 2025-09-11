@@ -215,6 +215,7 @@ def download():
     tables = [t.strip() for t in payload.get("tables", "").replace(",", " ").split() if t.strip()]
     include_moe = bool(payload.get("include_moe", False))
     api_key = payload.get("api_key") or DEFAULT_API_KEY or None
+    format_type = payload.get("format", "zip")  # "zip" or "combined"
 
     if not tables:
         return jsonify({"error": "Please provide at least one ACS table ID"}), 400
@@ -240,19 +241,54 @@ def download():
         except Exception as e:
             return jsonify({"error": f"Failed to build CSV for {years[0]}: {e}"}), 502
 
-    # Multiple years: return a ZIP containing one CSV per year
-    zip_mem = io.BytesIO()
-    try:
-        with zipfile.ZipFile(zip_mem, mode='w', compression=zipfile.ZIP_DEFLATED) as zf:
+    # Multiple years: return based on format choice
+    if format_type == "combined":
+        # Combine all years into a single CSV
+        try:
+            combined_rows = []
+            
+            # Process all years
             for y in years:
-                fname, mem = build_csv_for_year(y, geo, tables, include_moe, api_key, county)
-                zf.writestr(fname, mem.read())
-        zip_mem.seek(0)
-        county_slug = county.lower().replace(" ", "_")
-        zip_name = f"{county_slug}_acs_{geo}_{years[0]}-{years[-1]}.zip"
-        return send_file(zip_mem, mimetype="application/zip", as_attachment=True, download_name=zip_name)
-    except Exception as e:
-        return jsonify({"error": f"Failed to build ZIP: {e}"}), 502
+                year_filename, year_mem = build_csv_for_year(y, geo, tables, include_moe, api_key, county)
+                year_mem.seek(0)
+                year_content = year_mem.read().decode('utf-8')
+                year_lines = year_content.strip().split('\n')
+                
+                # First year: include header with year column
+                if y == years[0]:
+                    header = year_lines[0]
+                    combined_rows.append('year,' + header)
+                    # Add data rows with year
+                    for line in year_lines[1:]:
+                        combined_rows.append(f"{y},{line}")
+                else:
+                    # Subsequent years: skip header, add data rows with year
+                    for line in year_lines[1:]:
+                        combined_rows.append(f"{y},{line}")
+            
+            # Create combined CSV content
+            combined_content = '\n'.join(combined_rows)
+            combined_mem = io.BytesIO(combined_content.encode('utf-8'))
+            
+            county_slug = county.lower().replace(" ", "_")
+            combined_name = f"{county_slug}_acs_{geo}_{years[0]}-{years[-1]}_combined.csv"
+            return send_file(combined_mem, mimetype="text/csv", as_attachment=True, download_name=combined_name)
+        except Exception as e:
+            return jsonify({"error": f"Failed to build combined CSV: {e}"}), 502
+    else:
+        # Default ZIP format
+        zip_mem = io.BytesIO()
+        try:
+            with zipfile.ZipFile(zip_mem, mode='w', compression=zipfile.ZIP_DEFLATED) as zf:
+                for y in years:
+                    fname, mem = build_csv_for_year(y, geo, tables, include_moe, api_key, county)
+                    zf.writestr(fname, mem.read())
+            zip_mem.seek(0)
+            county_slug = county.lower().replace(" ", "_")
+            zip_name = f"{county_slug}_acs_{geo}_{years[0]}-{years[-1]}.zip"
+            return send_file(zip_mem, mimetype="application/zip", as_attachment=True, download_name=zip_name)
+        except Exception as e:
+            return jsonify({"error": f"Failed to build ZIP: {e}"}), 502
 
 @app.get("/")
 def index():
@@ -265,106 +301,195 @@ def index():
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <meta http-equiv="Cache-Control" content="no-store" />
   <style>
-    :root {
-      --bg: #f1f5f9; /* slate-100: soft gray-blue */
-      --card: #ffffff;
-      --card-2: #f8fbff;
-      --text: #0f172a;   /* slate-900 */
-      --muted: #475569;  /* slate-600 */
-      --primary: #2563eb;   /* blue-600 */
-      --primary-2: #1e40af; /* blue-800 */
-      --ring: rgba(37, 99, 235, .25);
-      --border: #e5e7eb;
-      --success: #16a34a; /* green-600 */
-      --label: #1e40af; /* blue-800 */
+    * {
+      box-sizing: border-box;
     }
-    * { box-sizing: border-box; }
-    html, body { height: 100%; }
     body {
-      font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif;
+      font-family: 'Google Sans', 'Roboto', Arial, sans-serif;
       margin: 0;
-      background: var(--bg);
-      color: var(--text);
+      padding: 0;
+      background: linear-gradient(135deg, #e3f2fd 0%, #f3e5f5 100%);
+      min-height: 100vh;
+      color: #202124;
     }
-    .wrap { max-width: 900px; margin: 0 auto; padding: 2rem; }
-    header.hero { display: flex; align-items: center; gap: 1rem; margin: 1rem 0 1.5rem 0; }
-    /* logo removed */
-    h1 { font-size: 1.6rem; margin: 0; letter-spacing: .1px; color: var(--primary); }
-    .subtitle { color: #334155; margin-top: .25rem; font-size: .98rem; }
+    .container {
+      max-width: 670px;
+      margin: 40px auto;
+      padding: 0 24px;
+    }
     .card {
-      background: var(--card);
-      border: 1px solid var(--border);
-      border-radius: 16px;
-      box-shadow: 0 6px 18px rgba(2, 6, 23, .06);
-      padding: 1.25rem;
+      background: white;
+      border-radius: 8px;
+      box-shadow: 0 1px 3px rgba(60,64,67,0.3), 0 4px 8px 3px rgba(60,64,67,0.15);
+      padding: 48px 40px;
+      border: 1px solid #dadce0;
+      border-top: 4px solid #1a73e8;
     }
-    .row { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
-    @media (max-width: 720px) { .row { grid-template-columns: 1fr; } }
-    label { font-weight: 600; display: block; margin-top: .5rem; color: var(--label); }
-    .spaced-label { margin-top: 2rem; }
-    .hint { color: var(--muted); font-size: .92rem; }
-    .note { margin-top: .4rem; }
-    a { color: var(--primary-2); text-decoration: none; }
-    a:hover { text-decoration: underline; }
-    code { color: var(--primary-2); background: #eff6ff; padding: .1rem .35rem; border-radius: 6px; }
+    h1 {
+      font-size: 32px;
+      font-weight: 400;
+      color: #202124;
+      margin: 0 0 8px 0;
+      text-align: center;
+      letter-spacing: 0;
+    }
+    .subtitle {
+      color: #5f6368;
+      text-align: center;
+      margin: 0 0 40px 0;
+      line-height: 1.5;
+      font-size: 16px;
+    }
+    .form-group {
+      margin-bottom: 24px;
+    }
+    label {
+      display: block;
+      font-weight: 500;
+      color: #3c4043;
+      margin-bottom: 8px;
+      font-size: 14px;
+      letter-spacing: 0.25px;
+    }
     input, select {
-      width: 100%; margin-top: .5rem; padding: .75rem .85rem;
-      font-size: 1rem; color: var(--text);
-      background: #ffffff; border: 1px solid var(--border); border-radius: 10px;
-      outline: none; transition: border-color .15s ease, box-shadow .15s ease, background .15s ease;
+      width: 100%;
+      padding: 12px 16px;
+      border: 1px solid #dadce0;
+      border-radius: 4px;
+      font-size: 16px;
+      transition: border-color 0.2s ease;
+      background: white;
+      font-family: inherit;
     }
-    input::placeholder { color: #94a3b8; }
-    input:focus, select:focus { border-color: var(--primary); box-shadow: 0 0 0 4px var(--ring); }
-    .actions { display: flex; align-items: center; gap: .75rem; flex-wrap: wrap; margin-top: 1rem; }
-    button { padding: .8rem 1rem; font-size: 1rem; border: 0; border-radius: 10px; cursor: pointer; transition: background .15s ease, box-shadow .15s ease; }
-    .primary { background: var(--primary); color: white; box-shadow: none; }
-    .primary:hover { background: #1d4ed8; }
-    .primary:active { background: #1e40af; }
-    .ghost { background: transparent; color: var(--muted); border: 1px dashed var(--border); }
-    .footer { margin-top: 1.25rem; color: #1e40af; font-size: .92rem; }
-    /* Progress bar */
-    .progress { margin-top: 1rem; height: 12px; width: 100%; background: #dbeafe; border: 1px solid #bfdbfe; border-radius: 999px; overflow: hidden; display: none; }
-    .progress-bar { height: 100%; width: 0%; background: #2563eb; box-shadow: none; transition: width .2s ease; }
-    .progress-text { margin-top: .6rem; color: #1e40af; font-size: .92rem; display: none; }
+    select {
+      padding-right: 40px;
+      background-image: url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath fill='none' stroke='%23666' stroke-linecap='round' stroke-linejoin='round' stroke-width='2' d='M2 5l6 6 6-6'/%3E%3C/svg%3E");
+      background-repeat: no-repeat;
+      background-position: right 12px center;
+      background-size: 16px;
+      appearance: none;
+    }
+    input:focus, select:focus {
+      outline: none;
+      border-color: #1a73e8;
+      border-width: 2px;
+      padding: 11px 15px;
+    }
+    select:focus {
+      padding-right: 39px;
+    }
+    .row {
+      display: flex;
+      gap: 16px;
+    }
+    .row .form-group {
+      flex: 1;
+    }
+    button {
+      width: 100%;
+      background: #1a73e8;
+      color: white;
+      border: none;
+      padding: 12px 24px;
+      border-radius: 4px;
+      font-size: 14px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: all 0.2s ease;
+      margin-top: 16px;
+      text-transform: none;
+      letter-spacing: 0.25px;
+      font-family: inherit;
+    }
+    button:hover {
+      background: #1557b0;
+      box-shadow: 0 1px 2px 0 rgba(60,64,67,0.3), 0 1px 3px 1px rgba(60,64,67,0.15);
+    }
+    button:active {
+      background: #1557b0;
+      box-shadow: 0 1px 2px 0 rgba(60,64,67,0.3), 0 2px 6px 2px rgba(60,64,67,0.15);
+    }
+    .help-text {
+      font-size: 12px;
+      color: #5f6368;
+      margin-top: 8px;
+      line-height: 1.4;
+    }
+    code {
+      background: #f1f3f4;
+      color: #c5221f;
+      padding: 2px 4px;
+      border-radius: 2px;
+      font-family: 'Roboto Mono', monospace;
+      font-size: 12px;
+    }
+    .progress {
+      margin-top: 24px;
+      height: 4px;
+      width: 100%;
+      background: #e8eaed;
+      border-radius: 2px;
+      overflow: hidden;
+      display: none;
+    }
+    .progress-bar {
+      height: 100%;
+      width: 0%;
+      background: #1a73e8;
+      transition: width .3s ease;
+    }
+    .progress-text {
+      margin-top: 8px;
+      color: #5f6368;
+      font-size: 12px;
+      display: none;
+    }
+    #msg {
+      margin-top: 16px;
+      color: #5f6368;
+      font-size: 14px;
+    }
+    @media (max-width: 600px) {
+      .container {
+        margin: 16px auto;
+        padding: 0 16px;
+      }
+      .card {
+        padding: 24px 16px;
+      }
+      .row {
+        flex-direction: column;
+        gap: 0;
+      }
+      h1 {
+        font-size: 24px;
+      }
+    }
   </style>
 </head>
 <body>
-  <div class="wrap">
-    <header class="hero">
-      <div>
-        <h1>ACS 5-year Downloader</h1>
-        <div class="subtitle">Tokens: <code>B01001</code> (totals only), <code>B01001_003</code> (specific), <code>B01001_*</code> (entire table).</div>
-      </div>
-    </header>
-
+  <div class="container">
     <div class="card">
-      <div class="row">
-        <div>
-          <label>County</label>
-          <select id="county">
-            <option value="Chatham">Chatham</option>
-            <option value="Liberty">Liberty</option>
-            <option value="Bryan">Bryan</option>
-            <option value="Effingham">Effingham</option>
-          </select>
-        </div>
-        <div>
-          <label>Geography</label>
-          <select id="geo">
-            <option value="county">County</option>
-            <option value="tract">Tract</option>
-            <option value="block group">Block Group</option>
-          </select>
-        </div>
+      <h1>ACS Data Downloader (5-yr)</h1>
+      <p class="subtitle">Get Census 5-year average data for Georgia counties<br>Tokens: <code>B01001</code> (totals), <code>B01001_003</code> (specific), <code>B01001_*</code> (full table)</p>
+      
+      <div class="form-group">
+        <label>County</label>
+        <select id="county">
+          <option value="Chatham">Chatham</option>
+          <option value="Liberty">Liberty</option>
+          <option value="Bryan">Bryan</option>
+          <option value="Effingham">Effingham</option>
+        </select>
       </div>
 
       <div class="row">
-        <div>
-          <label class="spaced-label">ACS Years</label>
-          <input id="years" type="text" value="2023" placeholder="2018-2023 or 2018,2020,2023" />
+        <div class="form-group">
+          <label>ACS Years</label>
+          <input id="years" type="text" value="2023" placeholder="2018-2023 or 2018,2020,2023">
         </div>
-        <div>
-          <label class="spaced-label">Include MOE</label>
+        <div class="form-group">
+          <label>Include MOE</label>
           <select id="moe">
             <option value="false" selected>No</option>
             <option value="true">Yes</option>
@@ -372,20 +497,27 @@ def index():
         </div>
       </div>
 
-
-      <label class="spaced-label">ACS table IDs</label>
-      <input id="tables" type="text" value="B01001 B19013" />
-      <div class="note hint">Separate with spaces or commas. Examples: <code>B01001</code>, <code>B19013</code>, <code>B01001_003</code>, <code>B01001_*</code></div>
-
-      <div class="actions">
-        <button class="primary" onclick="download()">Download CSV</button>
-        <span class="hint">CSV for one year or ZIP for a range.</span>
+      <div class="form-group">
+        <label>Output Format (for multiple years)</label>
+        <select id="format">
+          <option value="zip" selected>ZIP archive (separate files)</option>
+          <option value="combined">Single CSV (one year per row)</option>
+        </select>
+        <p class="help-text">Choose how to organize data when downloading multiple years</p>
       </div>
+
+      <div class="form-group">
+        <label>ACS table IDs</label>
+        <input id="tables" type="text" value="B01001 B19013">
+        <p class="help-text">Separate with spaces or commas. Examples: <code>B01001</code>, <code>B19013</code>, <code>B01001_003</code>, <code>B01001_*</code></p>
+      </div>
+
+      <button onclick="download()">Download Data</button>
 
       <div id="progress" class="progress"><div class="progress-bar" id="progressbar"></div></div>
       <div id="progresstext" class="progress-text">Working...</div>
 
-      <div id="msg" class="footer"></div>
+      <div id="msg"></div>
     </div>
   </div>
 
@@ -413,10 +545,11 @@ def index():
 
     async function download() {
       const years = document.getElementById('years')?.value;
-      const geo = document.getElementById('geo')?.value;
+      const geo = 'county'; // Always use county
       const county = document.getElementById('county')?.value;
       const moe = document.getElementById('moe')?.value === 'true';
       const tables = document.getElementById('tables')?.value;
+      const format = document.getElementById('format')?.value || 'zip';
       const apikey = undefined; // Use default API key
 
       const msg = document.getElementById('msg');
@@ -435,7 +568,7 @@ def index():
         const res = await fetch('/api/download', {
           method: 'POST',
           headers: {'Content-Type':'application/json'},
-          body: JSON.stringify({ years, geo, county, tables, include_moe: moe, api_key: apikey })
+          body: JSON.stringify({ years, geo, county, tables, include_moe: moe, api_key: apikey, format })
         });
 
         if (!res.ok) {
