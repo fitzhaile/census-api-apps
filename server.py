@@ -345,8 +345,8 @@ def index():
     }
     label {
       display: block;
-      font-weight: 500;
-      color: #3c4043;
+      font-weight: 600;
+      color: #5f6368;
       margin-bottom: 8px;
       font-size: 14px;
       letter-spacing: 0.25px;
@@ -464,6 +464,12 @@ def index():
       h1 {
         font-size: 24px;
       }
+      .subtitle {
+        white-space: pre-line;
+      }
+      select {
+        color: #202124;
+      }
     }
   </style>
 </head>
@@ -471,7 +477,8 @@ def index():
   <div class="container">
     <div class="card">
       <h1>ACS Data Downloader (5-yr)</h1>
-      <p class="subtitle">Get Census 5-year average data for Georgia counties<br>Tokens: <code>B01001</code> (totals), <code>B01001_003</code> (specific), <code>B01001_*</code> (full table)</p>
+      <p class="subtitle">Get Census 5-year
+average data for Georgia counties<br>Tokens: <code>B01001</code> (totals), <code>B01001_003</code> (specific), <code>B01001_*</code> (full table)</p>
       
       <div class="form-group">
         <label>County</label>
