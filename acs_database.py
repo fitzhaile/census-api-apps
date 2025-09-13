@@ -82,14 +82,34 @@ class ACSDatabase:
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
         
-        search_pattern = f'%{search_term}%'
-        cursor.execute('''
+        # Split search term into individual words
+        words = [word.strip() for word in search_term.split() if word.strip()]
+        
+        if not words:
+            return []
+        
+        # Build query with AND conditions for each word
+        where_conditions = []
+        params = []
+        
+        for word in words:
+            word_pattern = f'%{word}%'
+            where_conditions.append('(name LIKE ? OR concept LIKE ? OR id LIKE ? OR group_name LIKE ?)')
+            params.extend([word_pattern, word_pattern, word_pattern, word_pattern])
+        
+        # Join all conditions with AND
+        where_clause = ' AND '.join(where_conditions)
+        
+        query = f'''
             SELECT id, name, concept, group_name, year 
             FROM variables 
-            WHERE name LIKE ? OR concept LIKE ? OR id LIKE ? OR group_name LIKE ?
+            WHERE {where_clause}
             ORDER BY name
             LIMIT ?
-        ''', (search_pattern, search_pattern, search_pattern, search_pattern, limit))
+        '''
+        
+        params.append(limit)
+        cursor.execute(query, params)
         
         results = cursor.fetchall()
         conn.close()

@@ -1,5 +1,6 @@
 from flask import Flask, request, jsonify, send_file
 import csv, io, time, requests, zipfile, os
+from acs_database import ACSDatabase
 
 app = Flask(__name__)
 
@@ -20,6 +21,13 @@ DEFAULT_API_KEY = os.environ.get("CENSUS_API_KEY", "1f9fd90d5bd516181c8cbc907122
 # Directory to persist generated CSV files
 DOWNLOADS_DIR = os.path.join(os.path.dirname(__file__), "csv-downloads")
 os.makedirs(DOWNLOADS_DIR, exist_ok=True)
+
+# Initialize ACS database for variable search
+try:
+    acs_db = ACSDatabase()
+except Exception as e:
+    print(f"Warning: Could not initialize ACS database: {e}")
+    acs_db = None
 
 def fetch_variables_metadata(year: int):
     url = f"{CENSUS_BASE}/{year}/{DATASET}/variables.json"
@@ -180,7 +188,11 @@ def build_csv_for_year(year, geo, tables, include_moe, api_key, county_name=None
             label = str(label)
         except Exception:
             label = var
-        return f"{label} ({var})"
+        
+        # Format the label the same way as search results
+        import re
+        formatted = re.sub(r'!!+', ' -> ', label).replace(':', '').strip()
+        return formatted
 
     header_display = geo_fields + ["NAME"] + [pretty_label(v) for v in var_fields]
 
@@ -289,6 +301,34 @@ def download():
             return send_file(zip_mem, mimetype="application/zip", as_attachment=True, download_name=zip_name)
         except Exception as e:
             return jsonify({"error": f"Failed to build ZIP: {e}"}), 502
+
+@app.route('/api/search-variables')
+def search_variables():
+    """Search ACS variables by name, concept, or ID"""
+    if not acs_db:
+        return jsonify({"error": "Database not available"}), 503
+    
+    search_term = request.args.get('q', '').strip()
+    if len(search_term) < 2:
+        return jsonify([])
+    
+    try:
+        results = acs_db.search_variables(search_term, limit=20)
+        # Convert to format expected by frontend
+        formatted_results = []
+        for var_id, name, concept, group_name, year in results:
+            # Extract table ID from variable ID (e.g., B01001_001E -> B01001)
+            table_id = var_id.split('_')[0] if '_' in var_id else var_id
+            formatted_results.append({
+                'id': var_id,
+                'table_id': table_id,
+                'name': name,
+                'concept': concept,
+                'group': group_name
+            })
+        return jsonify(formatted_results)
+    except Exception as e:
+        return jsonify({"error": f"Search failed: {e}"}), 500
 
 @app.get("/")
 def index():
@@ -449,6 +489,79 @@ def index():
       color: #5f6368;
       font-size: 14px;
     }
+    .search-container {
+      position: relative;
+    }
+    .search-spinner {
+      position: absolute;
+      right: 12px;
+      top: 50%;
+      transform: translateY(-50%);
+      width: 16px;
+      height: 16px;
+      border: 2px solid #e8eaed;
+      border-top: 2px solid #1a73e8;
+      border-radius: 50%;
+      animation: spin 1s linear infinite;
+      display: none;
+    }
+    @keyframes spin {
+      0% { transform: translateY(-50%) rotate(0deg); }
+      100% { transform: translateY(-50%) rotate(360deg); }
+    }
+    .search-results {
+      position: absolute;
+      top: 100%;
+      left: 0;
+      right: 0;
+      background: white;
+      border: 1px solid #dadce0;
+      border-top: none;
+      border-radius: 0 0 4px 4px;
+      max-height: 200px;
+      overflow-y: auto;
+      z-index: 1000;
+      display: none;
+      box-shadow: 0 2px 8px rgba(60,64,67,0.15);
+    }
+    .search-result-item {
+      padding: 12px 16px;
+      cursor: pointer;
+      border-bottom: 1px solid #f1f3f4;
+      transition: background-color 0.2s ease;
+    }
+    .search-result-item:hover {
+      background-color: #f8f9fa;
+    }
+    .search-result-item:last-child {
+      border-bottom: none;
+    }
+    .search-result-id {
+      font-weight: 600;
+      color: #1a73e8;
+      font-family: 'Roboto Mono', monospace;
+      font-size: 13px;
+    }
+    .search-result-name {
+      color: #202124;
+      font-size: 14px;
+      margin: 2px 0;
+      line-height: 1.4;
+    }
+    .search-result-name .hierarchy-arrow {
+      color: #1a73e8;
+      font-weight: bold;
+      margin: 0 4px;
+    }
+    .search-result-concept {
+      color: #5f6368;
+      font-size: 12px;
+    }
+    .search-result-name strong,
+    .search-result-concept strong {
+      color: #2d2d2d;
+      font-weight: 700;
+    }
     @media (max-width: 600px) {
       .container {
         margin: 16px auto;
@@ -493,11 +606,11 @@ Tokens: <code>B01001</code> (totals), <code>B01001_003</code> (specific), <code>
 
       <div class="row">
         <div class="form-group">
-          <label>ACS Years</label>
+          <label>Years</label>
           <input id="years" type="text" value="2023" placeholder="2018-2023 or 2018,2020,2023">
         </div>
         <div class="form-group">
-          <label>Include MOE</label>
+          <label>Include Margin of Error (MOE)</label>
           <select id="moe">
             <option value="false" selected>No</option>
             <option value="true">Yes</option>
@@ -508,15 +621,25 @@ Tokens: <code>B01001</code> (totals), <code>B01001_003</code> (specific), <code>
       <div class="form-group">
         <label>Output Format (for multiple years)</label>
         <select id="format">
-          <option value="zip" selected>ZIP archive (separate files)</option>
-          <option value="combined">Single CSV (one year per row)</option>
+          <option value="zip">ZIP archive (separate files)</option>
+          <option value="combined" selected>Single CSV (one year per row)</option>
         </select>
         <p class="help-text">Choose how to organize data when downloading multiple years</p>
       </div>
 
       <div class="form-group">
-        <label>ACS table IDs</label>
-        <input id="tables" type="text" value="B01001 B19013">
+        <label>Search Variables</label>
+        <div class="search-container">
+          <input id="variable-search" type="text" placeholder="Type to search variables..." autocomplete="off">
+          <div id="search-spinner" class="search-spinner"></div>
+          <div id="search-results" class="search-results"></div>
+        </div>
+        <p class="help-text">Search for ACS variables and click to add their table IDs below</p>
+      </div>
+
+      <div class="form-group">
+        <label>Table IDs</label>
+        <input id="tables" type="text" value="">
         <p class="help-text">Separate with spaces or commas. Examples: <code>B01001</code>, <code>B19013</code>, <code>B01001_003</code>, <code>B01001_*</code></p>
       </div>
 
@@ -551,6 +674,144 @@ Tokens: <code>B01001</code> (totals), <code>B01001_003</code> (specific), <code>
       if (text && t) t.textContent = text;
     }
 
+    // Live search functionality
+    let searchTimeout;
+    const searchInput = document.getElementById('variable-search');
+    const searchResults = document.getElementById('search-results');
+    const searchSpinner = document.getElementById('search-spinner');
+    const tablesInput = document.getElementById('tables');
+    
+    // DOM elements found
+
+    function addTableId(tableId) {
+      const currentValue = tablesInput.value.trim();
+      const tableIds = currentValue ? currentValue.split(/[,\s]+/).filter(id => id) : [];
+      
+      // Check if table ID already exists
+      if (!tableIds.includes(tableId)) {
+        tableIds.push(tableId);
+        tablesInput.value = tableIds.join(' ');
+      }
+      
+      // Clear search
+      searchInput.value = '';
+      searchResults.style.display = 'none';
+      searchSpinner.style.display = 'none';
+    }
+
+    function formatVariableName(name, searchTerms = []) {
+      if (!name) return '';
+      
+      let formatted = name
+        .replace(/!!/g, ' <span class="hierarchy-arrow">→</span> ')  // Replace !! with styled arrow
+        .replace(/:/g, '')      // Remove trailing colons
+        .trim();
+      
+      // Highlight search terms in bold using simple string replacement
+      if (searchTerms.length > 0) {
+        searchTerms.forEach(term => {
+          if (term.trim()) {
+            // Simple case-insensitive replacement without regex
+            const lowerFormatted = formatted.toLowerCase();
+            const lowerTerm = term.toLowerCase();
+            let index = lowerFormatted.indexOf(lowerTerm);
+            while (index !== -1) {
+              const before = formatted.substring(0, index);
+              const match = formatted.substring(index, index + term.length);
+              const after = formatted.substring(index + term.length);
+              formatted = before + '<strong>' + match + '</strong>' + after;
+              index = lowerFormatted.indexOf(lowerTerm, index + 1);
+            }
+          }
+        });
+      }
+      
+      return formatted;
+    }
+
+    function displaySearchResults(results, searchTerms = []) {
+      searchResults.innerHTML = '';
+      
+      if (results.length === 0) {
+        searchResults.innerHTML = '<div class="search-result-item" style="color: #5f6368; font-style: italic;">No variables found</div>';
+      } else {
+        results.forEach(result => {
+          const item = document.createElement('div');
+          item.className = 'search-result-item';
+          const formattedName = formatVariableName(result.name, searchTerms);
+          const formattedConcept = formatVariableName(result.concept, searchTerms);
+          item.innerHTML = `
+            <div class="search-result-id">${result.table_id}</div>
+            <div class="search-result-name">${formattedName}</div>
+            <div class="search-result-concept">${formattedConcept}</div>
+          `;
+          item.onclick = () => addTableId(result.table_id);
+          searchResults.appendChild(item);
+        });
+      }
+      
+      searchResults.style.display = 'block';
+    }
+
+    function performSearch(query) {
+      if (query.length < 2) {
+        searchResults.style.display = 'none';
+        searchSpinner.style.display = 'none';
+        return;
+      }
+
+      // Extract search terms for highlighting
+      const searchTerms = query.trim().split(/\s+/).filter(term => term.length > 0);
+
+      // Show spinner
+      searchSpinner.style.display = 'block';
+      searchResults.style.display = 'none';
+
+      fetch(`/api/search-variables?q=${encodeURIComponent(query)}`)
+        .then(response => response.json())
+        .then(data => {
+          // Hide spinner
+          searchSpinner.style.display = 'none';
+          
+          if (data.error) {
+            console.error('Search error:', data.error);
+            searchResults.innerHTML = '<div class="search-result-item" style="color: #c5221f;">Search error</div>';
+            searchResults.style.display = 'block';
+          } else {
+            displaySearchResults(data, searchTerms);
+          }
+        })
+        .catch(error => {
+          // Hide spinner
+          searchSpinner.style.display = 'none';
+          
+          console.error('Search failed:', error);
+          searchResults.innerHTML = '<div class="search-result-item" style="color: #c5221f;">Search failed</div>';
+          searchResults.style.display = 'block';
+        });
+    }
+
+    // Set up search input event listener
+    if (searchInput) {
+      searchInput.addEventListener('input', function() {
+        clearTimeout(searchTimeout);
+        const query = this.value.trim();
+        
+        if (query.length >= 2) {
+          searchTimeout = setTimeout(() => performSearch(query), 300);
+        } else {
+          searchResults.style.display = 'none';
+        }
+      });
+    }
+
+    // Hide search results when clicking outside
+    document.addEventListener('click', function(event) {
+      if (!event.target.closest('.search-container')) {
+        searchResults.style.display = 'none';
+      }
+    });
+
     async function download() {
       const years = document.getElementById('years')?.value;
       const geo = 'county'; // Always use county
@@ -563,7 +824,7 @@ Tokens: <code>B01001</code> (totals), <code>B01001_003</code> (specific), <code>
       const msg = document.getElementById('msg');
       if (msg) msg.textContent = '';
       showProgress();
-      setProgress(10, 'Starting...');
+      setProgress(10, 'Moving...');
 
       let pct = 10;
       const timer = setInterval(() => {
