@@ -626,7 +626,7 @@ Tokens: <code>B01001</code> (totals), <code>B01001_003</code> (specific), <code>
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=8000)
 
-# Render config health check
+# Render.com config health check
 @app.get("/healthz")
 def healthz():
     return "ok", 200
