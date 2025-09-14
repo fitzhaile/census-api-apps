@@ -400,7 +400,7 @@ def index():
       color: #202124;
     }
     .container {
-      max-width: 770px;
+      max-width: 920px;
       margin: 40px auto;
       padding: 0 24px;
     }
@@ -800,7 +800,7 @@ Tokens: <code>B01001</code> (totals), <code>B01001_003</code> (specific), <code>
               <span class="calc-equals">=</span>
             </div>
             <div class="calc-line">
-              <input type="text" class="calc-name" placeholder="Calculation name (e.g., Percent Black)" maxlength="50">
+              <input type="text" class="calc-name" placeholder="Calculation name (e.g., Percent of total)" maxlength="50">
               <button type="button" class="btn-remove-calc" onclick="removeCalculation(this)" style="display:none;">Delete calculation</button>
             </div>
           </div>
@@ -1070,7 +1070,8 @@ Tokens: <code>B01001</code> (totals), <code>B01001_003</code> (specific), <code>
         variables.forEach(variable => {
           const option = document.createElement('option');
           option.value = variable.id;
-          option.textContent = `${variable.id} - ${variable.name}`;
+          const formattedName = variable.name.replace(/!!/g, ' → ').replace(/:/g, '').trim();
+          option.textContent = `${variable.id} - ${formattedName}`;
           variableSelect.appendChild(option);
         });
         
@@ -1115,7 +1116,7 @@ Tokens: <code>B01001</code> (totals), <code>B01001_003</code> (specific), <code>
           '<span class="calc-equals">=</span>' +
         '</div>' +
         '<div class="calc-line">' +
-          '<input type="text" class="calc-name" placeholder="Calculation name (e.g., Percent Black)" maxlength="50">' +
+          '<input type="text" class="calc-name" placeholder="Calculation name (e.g., Percent of total)" maxlength="50">' +
           '<button type="button" class="btn-remove-calc" onclick="removeCalculation(this)">Delete calculation</button>' +
         '</div>';
       
