@@ -1,6 +1,11 @@
 from flask import Flask, request, jsonify, send_file
 import csv, io, time, requests, zipfile, os
 from acs_database import ACSDatabase
+import openai
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+load_dotenv()
 
 app = Flask(__name__)
 
@@ -17,6 +22,7 @@ COUNTIES = {
 }
 DEFAULT_COUNTY = "Chatham"
 DEFAULT_API_KEY = os.environ.get("CENSUS_API_KEY", "1f9fd90d5bd516181c8cbc907122204225f71b35")
+OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
 
 # Directory to persist generated CSV files
 DOWNLOADS_DIR = os.path.join(os.path.dirname(__file__), "csv-downloads")
@@ -377,6 +383,71 @@ def search_variables():
     except Exception as e:
         return jsonify({"error": f"Search failed: {e}"}), 500
 
+@app.route('/api/ask-chatgpt', methods=['POST'])
+def ask_chatgpt():
+    """Ask ChatGPT questions about ACS data using the database"""
+    if not OPENAI_API_KEY:
+        return jsonify({"error": "OpenAI API key not configured"}), 503
+    
+    if not acs_db:
+        return jsonify({"error": "Database not available"}), 503
+    
+    try:
+        data = request.get_json()
+        question = data.get('question', '').strip()
+        
+        if not question:
+            return jsonify({"error": "No question provided"}), 400
+        
+        # Search the database for relevant variables
+        search_results = acs_db.search_variables(question, limit=10)
+        
+        # Format the search results for ChatGPT
+        context_data = []
+        for var_id, name, concept, group_name, year in search_results:
+            context_data.append({
+                'id': var_id,
+                'name': name,
+                'concept': concept,
+                'group': group_name,
+                'year': year
+            })
+        
+        # Create context for ChatGPT
+        context = f"""You are an expert on the American Community Survey (ACS) data. 
+        
+Here are some relevant ACS variables from the database that might help answer the user's question:
+
+{chr(10).join([f"- {var['id']}: {var['name']} (Concept: {var['concept']}, Group: {var['group']})" for var in context_data])}
+
+Please answer the user's question about ACS data. If you need more specific information about variables, suggest the user search for them using the search functionality. Be helpful and accurate.
+
+User's question: {question}"""
+        
+        # Initialize OpenAI client
+        client = openai.OpenAI(api_key=OPENAI_API_KEY)
+        
+        # Call ChatGPT API
+        response = client.chat.completions.create(
+            model="gpt-3.5-turbo-16k",  # Using 16k model which might have different pricing
+            messages=[
+                {"role": "system", "content": "You are a helpful assistant specializing in American Community Survey (ACS) data and Census statistics."},
+                {"role": "user", "content": context}
+            ],
+            max_tokens=300,  # Reduced tokens to save costs
+            temperature=0.7
+        )
+        
+        answer = response.choices[0].message.content
+        
+        return jsonify({
+            "answer": answer,
+            "relevant_variables": context_data
+        })
+        
+    except Exception as e:
+        return jsonify({"error": f"ChatGPT request failed: {e}"}), 500
+
 @app.get("/")
 def index():
     html = """
@@ -691,6 +762,47 @@ def index():
       color: #2d2d2d;
       font-weight: 700;
     }
+    .chatgpt-answer {
+      margin-top: 12px;
+      padding: 16px;
+      background: #f8f9fa;
+      border: 1px solid #e8eaed;
+      border-radius: 4px;
+    }
+    .chatgpt-response {
+      color: #202124;
+      font-size: 14px;
+      line-height: 1.5;
+      margin-bottom: 12px;
+    }
+    .chatgpt-variables {
+      border-top: 1px solid #e8eaed;
+      padding-top: 12px;
+    }
+    .chatgpt-variables h4 {
+      margin: 0 0 8px 0;
+      font-size: 13px;
+      color: #5f6368;
+      font-weight: 600;
+    }
+    .chatgpt-variable-item {
+      padding: 6px 8px;
+      margin: 4px 0;
+      background: white;
+      border: 1px solid #dadce0;
+      border-radius: 3px;
+      font-size: 12px;
+      cursor: pointer;
+      transition: background-color 0.2s ease;
+    }
+    .chatgpt-variable-item:hover {
+      background: #f1f3f4;
+    }
+    .chatgpt-variable-id {
+      font-weight: 600;
+      color: #1a73e8;
+      font-family: 'Roboto Mono', monospace;
+    }
     @media (max-width: 600px) {
       .container {
         margin: 16px auto;
@@ -764,6 +876,19 @@ Tokens: <code>B01001</code> (totals), <code>B01001_003</code> (specific), <code>
           <div id="search-results" class="search-results"></div>
         </div>
         <p class="help-text">Search for ACS variables and click to add their table IDs below</p>
+      </div>
+
+      <div class="form-group">
+        <label>Ask ChatGPT about ACS Data</label>
+        <div class="search-container">
+          <input id="chatgpt-question" type="text" placeholder="Ask a question about ACS data (e.g., 'What variables show income by race?')" autocomplete="off">
+          <div id="chatgpt-spinner" class="search-spinner"></div>
+        </div>
+        <div id="chatgpt-answer" class="chatgpt-answer" style="display: none;">
+          <div class="chatgpt-response"></div>
+          <div class="chatgpt-variables"></div>
+        </div>
+        <p class="help-text">Ask questions about ACS data and get AI-powered answers with relevant variables</p>
       </div>
 
       <div class="form-group">
@@ -980,6 +1105,119 @@ Tokens: <code>B01001</code> (totals), <code>B01001_003</code> (specific), <code>
         searchResults.style.display = 'none';
       }
     });
+
+    // ChatGPT functionality
+    const chatgptInput = document.getElementById('chatgpt-question');
+    const chatgptSpinner = document.getElementById('chatgpt-spinner');
+    const chatgptAnswer = document.getElementById('chatgpt-answer');
+    const chatgptResponse = document.querySelector('.chatgpt-response');
+    const chatgptVariables = document.querySelector('.chatgpt-variables');
+    let chatgptTimeout;
+
+    function askChatGPT(question) {
+      if (question.length < 3) {
+        chatgptAnswer.style.display = 'none';
+        return;
+      }
+
+      // Show spinner
+      chatgptSpinner.style.display = 'block';
+      chatgptAnswer.style.display = 'none';
+
+      fetch('/api/ask-chatgpt', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ question: question })
+      })
+      .then(response => response.json())
+      .then(data => {
+        // Hide spinner
+        chatgptSpinner.style.display = 'none';
+        
+        if (data.error) {
+          console.error('ChatGPT error:', data.error);
+          chatgptResponse.innerHTML = `<div style="color: #c5221f;">Error: ${data.error}</div>`;
+        } else {
+          // Display the answer with line breaks after numbered solutions and variable IDs
+          let formattedAnswer = data.answer;
+          
+          // Add line breaks after numbered solutions (1., 2., 3., etc.)
+          formattedAnswer = formattedAnswer.replace(/(\d+\.\s[^<]*?)(?=\d+\.|$)/g, '$1<br><br>');
+          
+          // Extract variable IDs from the response and add them to variable names
+          // Look for patterns like "variable name: `B19013_001E`" and enhance them
+          formattedAnswer = formattedAnswer.replace(/variable name:\s*`([^`]+)`/gi, (match, varId) => {
+            // Find the corresponding variable in relevant_variables
+            const variable = data.relevant_variables.find(v => v.id === varId);
+            if (variable) {
+              return `variable name: <strong>${varId}</strong> (${variable.name})`;
+            }
+            return `variable name: <strong>${varId}</strong>`;
+          });
+          
+          // Also enhance any standalone variable IDs in backticks (including full variable IDs like B19013_001E)
+          formattedAnswer = formattedAnswer.replace(/`([A-Z]\d+[A-Z]?\d*[A-Z]?_\d+[A-Z]?)`/g, '<strong>$1</strong>');
+          
+          // And enhance shorter table IDs in backticks
+          formattedAnswer = formattedAnswer.replace(/`([A-Z]\d+[A-Z]?\d*[A-Z]?)`/g, '<strong>$1</strong>');
+          
+          chatgptResponse.innerHTML = formattedAnswer;
+          
+          // Display relevant variables
+          if (data.relevant_variables && data.relevant_variables.length > 0) {
+            chatgptVariables.innerHTML = `
+              <h4>Relevant Variables:</h4>
+              ${data.relevant_variables.map(variable => `
+                <div class="chatgpt-variable-item" onclick="addTableId('${variable.group}')">
+                  <div class="chatgpt-variable-id">${variable.id}</div>
+                  <div>${variable.name}</div>
+                  <div style="color: #5f6368; font-size: 11px;">${variable.concept}</div>
+                </div>
+              `).join('')}
+            `;
+          } else {
+            chatgptVariables.innerHTML = '';
+          }
+        }
+        
+        chatgptAnswer.style.display = 'block';
+      })
+      .catch(error => {
+        // Hide spinner
+        chatgptSpinner.style.display = 'none';
+        
+        console.error('ChatGPT request failed:', error);
+        chatgptResponse.innerHTML = '<div style="color: #c5221f;">Request failed. Please try again.</div>';
+        chatgptAnswer.style.display = 'block';
+      });
+    }
+
+    // Set up ChatGPT input event listener
+    if (chatgptInput) {
+      chatgptInput.addEventListener('input', function() {
+        clearTimeout(chatgptTimeout);
+        const question = this.value.trim();
+        
+        if (question.length >= 3) {
+          chatgptTimeout = setTimeout(() => askChatGPT(question), 1000);
+        } else {
+          chatgptAnswer.style.display = 'none';
+        }
+      });
+
+      // Also trigger on Enter key
+      chatgptInput.addEventListener('keypress', function(e) {
+        if (e.key === 'Enter') {
+          clearTimeout(chatgptTimeout);
+          const question = this.value.trim();
+          if (question.length >= 3) {
+            askChatGPT(question);
+          }
+        }
+      });
+    }
 
     // Calculation functions
     function updateCalculationOptions() {
