@@ -137,7 +137,7 @@ def parse_years(value, default=2023):
     except Exception:
         return [default]
 
-def build_csv_for_year(year, geo, tables, include_moe, api_key, county_name=None):
+def build_csv_for_year(year, geo, tables, include_moe, api_key, county_name=None, calculations=None):
     variables_meta = fetch_variables_metadata(year)
     vars_all = set(resolve_requested_variables(variables_meta, tables, include_moe))
     if not vars_all:
@@ -175,6 +175,43 @@ def build_csv_for_year(year, geo, tables, include_moe, api_key, county_name=None
 
         if i < len(batches) - 1:
             time.sleep(0.2)
+
+    # Add calculated fields
+    if calculations:
+        print(f"Processing {len(calculations)} calculations")
+        for calc in calculations:
+            numerator = calc.get('numerator')
+            denominator = calc.get('denominator')
+            calc_name = calc.get('name')
+            print(f"Processing calculation: {numerator} / {denominator} = {calc_name}")
+            
+            # Check if the variables exist directly in headers
+            print(f"Checking if variables exist in headers: {numerator} in {headers_all} = {numerator in headers_all}")
+            print(f"Checking if variables exist in headers: {denominator} in {headers_all} = {denominator in headers_all}")
+            
+            if numerator and denominator and calc_name and numerator in headers_all and denominator in headers_all:
+                print(f"Adding calculation column: {calc_name}")
+                # Add calculation column to each record
+                for rec in rows_index.values():
+                    try:
+                        num_val = float(rec.get(numerator, 0) or 0)
+                        den_val = float(rec.get(denominator, 0) or 0)
+                        
+                        if den_val != 0:
+                            calc_val = num_val / den_val
+                        else:
+                            calc_val = 0  # Handle division by zero
+                        
+                        rec[calc_name] = calc_val
+                    except (ValueError, TypeError):
+                        rec[calc_name] = 0  # Handle invalid data
+                
+                # Add to headers if not already present
+                if calc_name not in headers_all:
+                    headers_all.append(calc_name)
+                    print(f"Added {calc_name} to headers")
+            else:
+                print(f"Skipping calculation - variables not found in headers")
 
     geo_fields = [g for g in ["state","county","tract","block group"] if g in headers_all]
     var_fields = sorted([h for h in headers_all if h not in geo_fields + ["NAME"]])
@@ -228,6 +265,8 @@ def download():
     include_moe = bool(payload.get("include_moe", False))
     api_key = payload.get("api_key") or DEFAULT_API_KEY or None
     format_type = payload.get("format", "zip")  # "zip" or "combined"
+    calculations = payload.get("calculations", [])
+    print(f"Received calculations: {calculations}")
 
     if not tables:
         return jsonify({"error": "Please provide at least one ACS table ID"}), 400
@@ -248,7 +287,7 @@ def download():
     # Single year behaves as before (single CSV)
     if len(years) == 1:
         try:
-            filename, mem = build_csv_for_year(years[0], geo, tables, include_moe, api_key, county)
+            filename, mem = build_csv_for_year(years[0], geo, tables, include_moe, api_key, county, calculations)
             return send_file(mem, mimetype="text/csv", as_attachment=True, download_name=filename)
         except Exception as e:
             return jsonify({"error": f"Failed to build CSV for {years[0]}: {e}"}), 502
@@ -261,7 +300,7 @@ def download():
             
             # Process all years
             for y in years:
-                year_filename, year_mem = build_csv_for_year(y, geo, tables, include_moe, api_key, county)
+                year_filename, year_mem = build_csv_for_year(y, geo, tables, include_moe, api_key, county, calculations)
                 year_mem.seek(0)
                 year_content = year_mem.read().decode('utf-8')
                 year_lines = year_content.strip().split('\n')
@@ -293,7 +332,7 @@ def download():
         try:
             with zipfile.ZipFile(zip_mem, mode='w', compression=zipfile.ZIP_DEFLATED) as zf:
                 for y in years:
-                    fname, mem = build_csv_for_year(y, geo, tables, include_moe, api_key, county)
+                    fname, mem = build_csv_for_year(y, geo, tables, include_moe, api_key, county, calculations)
                     zf.writestr(fname, mem.read())
             zip_mem.seek(0)
             county_slug = county.lower().replace(" ", "_")
@@ -382,6 +421,61 @@ def index():
     }
     .form-group {
       margin-bottom: 24px;
+    }
+    .calculation-row {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      margin-bottom: 8px;
+      padding: 8px;
+      border: 1px solid #e8eaed;
+      border-radius: 4px;
+      background: #f8f9fa;
+      flex-wrap: wrap;
+    }
+    .calculation-row select {
+      flex: 1;
+      margin: 0;
+      min-width: 100px;
+      max-width: 150px;
+    }
+    .calculation-row input {
+      flex: 1.5;
+      margin: 0;
+      min-width: 120px;
+    }
+    .calc-operator, .calc-equals {
+      font-weight: bold;
+      color: #5f6368;
+      font-size: 18px;
+    }
+    .btn-add-calc {
+      background: #4285f4;
+      color: white;
+      border: none;
+      padding: 8px 16px;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 14px;
+      margin-top: 8px;
+    }
+    .btn-add-calc:hover {
+      background: #3367d6;
+    }
+    .btn-remove-calc {
+      background: #ea4335;
+      color: white;
+      border: none;
+      width: 24px;
+      height: 24px;
+      border-radius: 50%;
+      cursor: pointer;
+      font-size: 16px;
+      line-height: 1;
+      flex-shrink: 0;
+    }
+    .btn-remove-calc:hover {
+      background: #d33b2c;
     }
     label {
       display: block;
@@ -643,6 +737,32 @@ Tokens: <code>B01001</code> (totals), <code>B01001_003</code> (specific), <code>
         <p class="help-text">Separate with spaces or commas. Examples: <code>B01001</code>, <code>B19013</code>, <code>B01001_003</code>, <code>B01001_*</code></p>
       </div>
 
+      <div class="form-group">
+        <label>Calculations (Optional)</label>
+        <div id="calculations">
+          <div class="calculation-row">
+            <select class="calc-numerator-table" data-type="numerator">
+              <option value="">Numerator Table</option>
+            </select>
+            <select class="calc-numerator-var">
+              <option value="">Numerator Variable</option>
+            </select>
+            <span class="calc-operator">÷</span>
+            <select class="calc-denominator-table" data-type="denominator">
+              <option value="">Denominator Table</option>
+            </select>
+            <select class="calc-denominator-var">
+              <option value="">Denominator Variable</option>
+            </select>
+            <span class="calc-equals">=</span>
+            <input type="text" class="calc-name" placeholder="Calculation name (e.g., Percent Black)" maxlength="50">
+            <button type="button" class="btn-remove-calc" onclick="removeCalculation(this)" style="display:none;">×</button>
+          </div>
+        </div>
+        <button type="button" onclick="addCalculation()" class="btn-add-calc">+ Add Calculation</button>
+        <p class="help-text">Create calculated fields like percentages and ratios. Both original variables and calculations will be included in the output.</p>
+      </div>
+
       <button onclick="download()">Download Data</button>
 
       <div id="progress" class="progress"><div class="progress-bar" id="progressbar"></div></div>
@@ -691,6 +811,9 @@ Tokens: <code>B01001</code> (totals), <code>B01001_003</code> (specific), <code>
       if (!tableIds.includes(tableId)) {
         tableIds.push(tableId);
         tablesInput.value = tableIds.join(' ');
+        
+        // Manually trigger updateCalculationOptions since setting value doesn't trigger input event
+        updateCalculationOptions();
       }
       
       // Clear search
@@ -812,6 +935,214 @@ Tokens: <code>B01001</code> (totals), <code>B01001_003</code> (specific), <code>
       }
     });
 
+    // Calculation functions
+    function updateCalculationOptions() {
+      console.log('updateCalculationOptions called');
+      const tablesInput = document.getElementById('tables');
+      if (!tablesInput) {
+        console.log('Tables input not found');
+        return;
+      }
+      
+      const tableIds = tablesInput.value.split(/[,\s]+/).filter(id => id.trim());
+      console.log('Table IDs found:', tableIds);
+      
+      // Get all table selection dropdowns
+      const numeratorTableSelects = document.querySelectorAll('.calc-numerator-table');
+      const denominatorTableSelects = document.querySelectorAll('.calc-denominator-table');
+      console.log('Found dropdowns - numerator tables:', numeratorTableSelects.length, 'denominator tables:', denominatorTableSelects.length);
+      
+      // Update table selection dropdowns
+      [...numeratorTableSelects, ...denominatorTableSelects].forEach(select => {
+        const currentValue = select.value;
+        const isNumerator = select.classList.contains('calc-numerator-table');
+        const placeholder = isNumerator ? 'Numerator Table' : 'Denominator Table';
+        
+        select.innerHTML = `<option value="">${placeholder}</option>`;
+        
+        tableIds.forEach(tableId => {
+          if (tableId.trim()) {
+            const option = document.createElement('option');
+            option.value = tableId.trim();
+            option.textContent = tableId.trim();
+            select.appendChild(option);
+          }
+        });
+        
+        console.log('Updated dropdown with', select.options.length, 'options');
+        
+        // Restore previous selection if it still exists
+        if (currentValue && tableIds.includes(currentValue)) {
+          select.value = currentValue;
+        }
+      });
+    }
+
+    // Fetch variable details for a specific table
+    async function fetchTableVariables(tableId) {
+      try {
+        console.log('Fetching variables for table:', tableId);
+        const response = await fetch(`/api/search-variables?q=${encodeURIComponent(tableId)}&limit=100`);
+        const data = await response.json();
+        console.log('API response:', data);
+        // The API returns the array directly, not in a 'results' property
+        return Array.isArray(data) ? data : (data.results || []);
+      } catch (error) {
+        console.error('Error fetching table variables:', error);
+        return [];
+      }
+    }
+
+    // Handle table selection change
+    async function handleTableChange(tableSelect, type) {
+      console.log('handleTableChange called with type:', type, 'table:', tableSelect.value);
+      const variableSelect = tableSelect.parentElement.querySelector(`.calc-${type}-var`);
+      console.log('Found variable select:', variableSelect);
+      await updateVariableDropdown(tableSelect, variableSelect);
+    }
+
+    // Update variable dropdown when table is selected
+    async function updateVariableDropdown(tableSelect, variableSelect) {
+      const tableId = tableSelect.value;
+      const currentValue = variableSelect.value;
+      console.log('updateVariableDropdown called with tableId:', tableId);
+      
+      // Clear existing options
+      variableSelect.innerHTML = '<option value="">Select variable...</option>';
+      
+      if (tableId) {
+        // Show loading
+        variableSelect.innerHTML = '<option value="">Loading variables...</option>';
+        
+        // Fetch variables for this table
+        const variables = await fetchTableVariables(tableId);
+        console.log('Fetched variables:', variables);
+        
+        // Clear and add options
+        variableSelect.innerHTML = '<option value="">Select variable...</option>';
+        
+        variables.forEach(variable => {
+          const option = document.createElement('option');
+          option.value = variable.id;
+          option.textContent = `${variable.id} - ${variable.name}`;
+          variableSelect.appendChild(option);
+        });
+        
+        console.log('Added', variables.length, 'variables to dropdown');
+        
+        // Restore previous selection if it still exists
+        if (currentValue) {
+          const matchingOption = Array.from(variableSelect.options).find(opt => opt.value === currentValue);
+          if (matchingOption) {
+            variableSelect.value = currentValue;
+          }
+        }
+      }
+    }
+
+    function addCalculation() {
+      const calculationsDiv = document.getElementById('calculations');
+      const newRow = document.createElement('div');
+      newRow.className = 'calculation-row';
+      newRow.innerHTML = 
+        '<select class="calc-numerator-table" data-type="numerator">' +
+          '<option value="">Numerator Table</option>' +
+        '</select>' +
+        '<select class="calc-numerator-var">' +
+          '<option value="">Numerator Variable</option>' +
+        '</select>' +
+        '<span class="calc-operator">÷</span>' +
+        '<select class="calc-denominator-table" data-type="denominator">' +
+          '<option value="">Denominator Table</option>' +
+        '</select>' +
+        '<select class="calc-denominator-var">' +
+          '<option value="">Denominator Variable</option>' +
+        '</select>' +
+        '<span class="calc-equals">=</span>' +
+        '<input type="text" class="calc-name" placeholder="Calculation name (e.g., Percent Black)" maxlength="50">' +
+        '<button type="button" class="btn-remove-calc" onclick="removeCalculation(this)">×</button>';
+      
+      calculationsDiv.appendChild(newRow);
+      updateCalculationOptions();
+      
+      // Show remove buttons if there are multiple calculations
+      updateRemoveButtons();
+    }
+
+    function removeCalculation(button) {
+      button.closest('.calculation-row').remove();
+      updateRemoveButtons();
+    }
+
+    function updateRemoveButtons() {
+      const calculationRows = document.querySelectorAll('.calculation-row');
+      const removeButtons = document.querySelectorAll('.btn-remove-calc');
+      
+      removeButtons.forEach((button, index) => {
+        // First row (index 0) never shows remove button, others show when there are 2+ rows
+        button.style.display = (index === 0 || calculationRows.length <= 1) ? 'none' : 'block';
+      });
+    }
+
+    function getCalculations() {
+      const calculations = [];
+      const calculationRows = document.querySelectorAll('.calculation-row');
+      console.log('Found calculation rows:', calculationRows.length);
+      
+      calculationRows.forEach((row, index) => {
+        const numeratorVarSelect = row.querySelector('.calc-numerator-var');
+        const denominatorVarSelect = row.querySelector('.calc-denominator-var');
+        const nameInput = row.querySelector('.calc-name');
+        
+        console.log(`Row ${index}:`, {
+          numerator: numeratorVarSelect ? numeratorVarSelect.value : 'not found',
+          denominator: denominatorVarSelect ? denominatorVarSelect.value : 'not found',
+          name: nameInput ? nameInput.value : 'not found'
+        });
+        
+        if (numeratorVarSelect && denominatorVarSelect && nameInput) {
+          const numerator = numeratorVarSelect.value;
+          const denominator = denominatorVarSelect.value;
+          const name = nameInput.value;
+          
+          if (numerator && denominator && name) {
+            calculations.push({
+              numerator: numerator,
+              denominator: denominator,
+              name: name
+            });
+          }
+        }
+      });
+      
+      console.log('Calculations to send:', calculations);
+      return calculations;
+    }
+
+    // Add event listeners for table selection changes
+    document.addEventListener('change', function(event) {
+      console.log('Change event triggered on:', event.target.className);
+      if (event.target.classList.contains('calc-numerator-table') || event.target.classList.contains('calc-denominator-table')) {
+        console.log('Table selection change detected');
+        updateCalculationOptions();
+        const type = event.target.getAttribute('data-type');
+        handleTableChange(event.target, type);
+      }
+    });
+
+    // Add event listener for Table IDs field changes (including from search results)
+    document.addEventListener('input', function(event) {
+      if (event.target.id === 'tables') {
+        console.log('Table IDs field changed, updating calculation options');
+        updateCalculationOptions();
+      }
+    });
+    
+    // Initialize calculation options on page load
+    document.addEventListener('DOMContentLoaded', function() {
+      updateCalculationOptions();
+    });
+
     async function download() {
       const years = document.getElementById('years')?.value;
       const geo = 'county'; // Always use county
@@ -819,12 +1150,13 @@ Tokens: <code>B01001</code> (totals), <code>B01001_003</code> (specific), <code>
       const moe = document.getElementById('moe')?.value === 'true';
       const tables = document.getElementById('tables')?.value;
       const format = document.getElementById('format')?.value || 'zip';
+      const calculations = getCalculations();
       const apikey = undefined; // Use default API key
 
       const msg = document.getElementById('msg');
       if (msg) msg.textContent = '';
       showProgress();
-      setProgress(10, 'Moving...');
+      setProgress(10, 'Working...');
 
       let pct = 10;
       const timer = setInterval(() => {
@@ -837,7 +1169,7 @@ Tokens: <code>B01001</code> (totals), <code>B01001_003</code> (specific), <code>
         const res = await fetch('/api/download', {
           method: 'POST',
           headers: {'Content-Type':'application/json'},
-          body: JSON.stringify({ years, geo, county, tables, include_moe: moe, api_key: apikey, format })
+          body: JSON.stringify({ years, geo, county, tables, include_moe: moe, api_key: apikey, format, calculations })
         });
 
         if (!res.ok) {
@@ -875,6 +1207,11 @@ Tokens: <code>B01001</code> (totals), <code>B01001_003</code> (specific), <code>
         setTimeout(hideProgress, 700);
       }
     }
+
+    // Initialize calculation options on page load
+    document.addEventListener('DOMContentLoaded', function() {
+      updateCalculationOptions();
+    });
   </script>
 </body>
 </html>
