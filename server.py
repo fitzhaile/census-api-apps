@@ -395,6 +395,7 @@ def ask_chatgpt():
     try:
         data = request.get_json()
         question = data.get('question', '').strip()
+        conversation_history = data.get('conversation_history', [])
         
         if not question:
             return jsonify({"error": "No question provided"}), 400
@@ -427,13 +428,22 @@ User's question: {question}"""
         # Initialize OpenAI client
         client = openai.OpenAI(api_key=OPENAI_API_KEY)
         
+        # Build messages array with conversation history
+        messages = [
+            {"role": "system", "content": "You are a helpful assistant specializing in American Community Survey (ACS) data and Census statistics."}
+        ]
+        
+        # Add conversation history (limit to last 10 messages to avoid token limits)
+        for msg in conversation_history[-10:]:
+            messages.append({"role": msg["role"], "content": msg["content"]})
+        
+        # Add current question
+        messages.append({"role": "user", "content": context})
+        
         # Call ChatGPT API
         response = client.chat.completions.create(
             model="gpt-3.5-turbo-16k",  # Using 16k model which might have different pricing
-            messages=[
-                {"role": "system", "content": "You are a helpful assistant specializing in American Community Survey (ACS) data and Census statistics."},
-                {"role": "user", "content": context}
-            ],
+            messages=messages,
             max_tokens=300,  # Reduced tokens to save costs
             temperature=0.7
         )
@@ -610,14 +620,19 @@ def index():
       appearance: none;
     }
     input:focus, select:focus {
-      outline: none;
-      border-color: #1a73e8;
-      border-width: 2px;
-      padding: 11px 15px;
+        outline: none;
+        border-color: #1a73e8;
+        border-width: 2px;
+        padding: 11px 15px;
     }
     select:focus {
-      padding-right: 39px;
+        padding-right: 39px;
     }
+    
+    ::placeholder {
+        color: #aaa; 
+    }
+
     .row {
       display: flex;
       gap: 16px;
@@ -641,6 +656,7 @@ def index():
       letter-spacing: 0.25px;
       font-family: inherit;
     }
+
     button:hover {
       background: #1557b0;
       box-shadow: 0 1px 2px 0 rgba(60,64,67,0.3), 0 1px 3px 1px rgba(60,64,67,0.15);
@@ -651,7 +667,7 @@ def index():
     }
     .help-text {
       font-size: 12px;
-      color: #5f6368;
+      color: #606265;
       margin-top: 8px;
       line-height: 1.4;
     }
@@ -762,12 +778,34 @@ def index():
       color: #2d2d2d;
       font-weight: 700;
     }
-    .chatgpt-answer {
+    .chatgpt-conversation {
       margin-top: 12px;
-      padding: 16px;
-      background: #f8f9fa;
+      max-height: 400px;
+      overflow-y: auto;
       border: 1px solid #e8eaed;
       border-radius: 4px;
+      background: #f8f9fa;
+    }
+    .chatgpt-message {
+      padding: 12px 16px;
+      border-bottom: 1px solid #e8eaed;
+    }
+    .chatgpt-message:last-child {
+      border-bottom: none;
+    }
+    .chatgpt-message.user {
+      background: #e3f2fd;
+      border-left: 4px solid #1a73e8;
+    }
+    .chatgpt-message.assistant {
+      background: white;
+      border-left: 4px solid #34a853;
+    }
+    .chatgpt-message-header {
+      font-size: 12px;
+      color: #5f6368;
+      font-weight: 600;
+      margin-bottom: 6px;
     }
     .chatgpt-response {
       color: #202124;
@@ -802,6 +840,9 @@ def index():
       font-weight: 600;
       color: #1a73e8;
       font-family: 'Roboto Mono', monospace;
+    }
+    .chatgpt-reply-container {
+      margin-top: 8px;
     }
     @media (max-width: 600px) {
       .container {
@@ -845,19 +886,19 @@ Tokens: <code>B01001</code> (totals), <code>B01001_003</code> (specific), <code>
         </select>
       </div>
 
-      <div class="row">
+    <div class="row">
         <div class="form-group">
           <label>Years</label>
-          <input id="years" type="text" value="2023" placeholder="2018-2023 or 2018,2020,2023">
+          <input id="years" type="text" placeholder="2023, or 2018-2023, or 2018,2019,2020">
         </div>
         <div class="form-group">
           <label>Include Margin of Error (MOE)</label>
-          <select id="moe">
-            <option value="false" selected>No</option>
-            <option value="true">Yes</option>
-          </select>
-        </div>
+        <select id="moe">
+          <option value="false" selected>No</option>
+          <option value="true">Yes</option>
+        </select>
       </div>
+    </div>
 
       <div class="form-group">
         <label>Output Format (for multiple years)</label>
@@ -869,33 +910,38 @@ Tokens: <code>B01001</code> (totals), <code>B01001_003</code> (specific), <code>
       </div>
 
       <div class="form-group">
-        <label>Search Variables</label>
+        <label>Search Tables</label>
         <div class="search-container">
-          <input id="variable-search" type="text" placeholder="Type to search variables..." autocomplete="off">
+          <input id="variable-search" type="text" placeholder="Type to search tables & variables..." autocomplete="off">
           <div id="search-spinner" class="search-spinner"></div>
           <div id="search-results" class="search-results"></div>
         </div>
-        <p class="help-text">Search for ACS variables and click to add their table IDs below</p>
+        <p class="help-text">Dropdown search for ACS tables. Click to add to calculation dropdowns.</p>
       </div>
 
       <div class="form-group">
-        <label>Ask ChatGPT about ACS Data</label>
+        <label>AI Search all data</label>
         <div class="search-container">
-          <input id="chatgpt-question" type="text" placeholder="Ask a question about ACS data (e.g., 'What variables show income by race?')" autocomplete="off">
+          <input id="chatgpt-question" type="text" placeholder="Show me variables for income by race" autocomplete="off">
           <div id="chatgpt-spinner" class="search-spinner"></div>
         </div>
-        <div id="chatgpt-answer" class="chatgpt-answer" style="display: none;">
-          <div class="chatgpt-response"></div>
-          <div class="chatgpt-variables"></div>
+        <div id="chatgpt-conversation" class="chatgpt-conversation" style="display: none;">
+          <!-- Conversation history will be populated here -->
         </div>
-        <p class="help-text">Ask questions about ACS data and get AI-powered answers with relevant variables</p>
+        <div id="chatgpt-reply-container" class="chatgpt-reply-container" style="display: none;">
+          <div class="search-container">
+            <input id="chatgpt-reply" type="text" placeholder="Reply or ask a follow-up question..." autocomplete="off">
+            <div id="chatgpt-reply-spinner" class="search-spinner"></div>
+          </div>
+        </div>
+        <p class="help-text">Ask questions about ACS data and get AI-powered answers with relevant variables. You can reply to continue the conversation.</p>
       </div>
 
-      <div class="form-group">
-        <label>Table IDs</label>
-        <input id="tables" type="text" value="">
-        <p class="help-text">Separate with spaces or commas. Examples: <code>B01001</code>, <code>B19013</code>, <code>B01001_003</code>, <code>B01001_*</code></p>
-      </div>
+        <div class="form-group">
+          <label>Table IDs</label>
+          <input id="tables" type="text" placeholder="B01001, B19013">
+          <p class="help-text">Separate with spaces or commas. Examples: <code>B01001</code>, <code>B19013</code></p>
+        </div>
 
       <div class="form-group">
         <label>Calculations (Optional)</label>
@@ -936,8 +982,8 @@ Tokens: <code>B01001</code> (totals), <code>B01001_003</code> (specific), <code>
 
       <button onclick="download()">Download Data</button>
 
-      <div id="progress" class="progress"><div class="progress-bar" id="progressbar"></div></div>
-      <div id="progresstext" class="progress-text">Working...</div>
+    <div id="progress" class="progress"><div class="progress-bar" id="progressbar"></div></div>
+    <div id="progresstext" class="progress-text">Working...</div>
 
       <div id="msg"></div>
     </div>
@@ -1109,88 +1155,147 @@ Tokens: <code>B01001</code> (totals), <code>B01001_003</code> (specific), <code>
     // ChatGPT functionality
     const chatgptInput = document.getElementById('chatgpt-question');
     const chatgptSpinner = document.getElementById('chatgpt-spinner');
-    const chatgptAnswer = document.getElementById('chatgpt-answer');
-    const chatgptResponse = document.querySelector('.chatgpt-response');
-    const chatgptVariables = document.querySelector('.chatgpt-variables');
+    const chatgptConversation = document.getElementById('chatgpt-conversation');
+    const chatgptReplyContainer = document.getElementById('chatgpt-reply-container');
+    const chatgptReplyInput = document.getElementById('chatgpt-reply');
+    const chatgptReplySpinner = document.getElementById('chatgpt-reply-spinner');
     let chatgptTimeout;
+    let chatgptReplyTimeout;
+    let conversationHistory = [];
 
-    function askChatGPT(question) {
+    function addMessageToConversation(role, content, variables = []) {
+      const messageDiv = document.createElement('div');
+      messageDiv.className = `chatgpt-message ${role}`;
+      
+      const header = document.createElement('div');
+      header.className = 'chatgpt-message-header';
+      header.textContent = role === 'user' ? 'You' : 'ChatGPT';
+      messageDiv.appendChild(header);
+      
+      const responseDiv = document.createElement('div');
+      responseDiv.className = 'chatgpt-response';
+      responseDiv.innerHTML = content;
+      messageDiv.appendChild(responseDiv);
+      
+      if (variables && variables.length > 0) {
+        const variablesDiv = document.createElement('div');
+        variablesDiv.className = 'chatgpt-variables';
+        variablesDiv.innerHTML = `
+          <h4>Relevant Variables:</h4>
+          ${variables.map(variable => `
+            <div class="chatgpt-variable-item" onclick="addTableId('${variable.group}')">
+              <div class="chatgpt-variable-id">${variable.id}</div>
+              <div>${variable.name}</div>
+              <div style="color: #5f6368; font-size: 11px;">${variable.concept}</div>
+            </div>
+          `).join('')}
+        `;
+        messageDiv.appendChild(variablesDiv);
+      }
+      
+      chatgptConversation.appendChild(messageDiv);
+      chatgptConversation.scrollTop = chatgptConversation.scrollHeight;
+    }
+
+    function formatChatGPTResponse(answer, relevantVariables = []) {
+      let formattedAnswer = answer;
+      
+      // Add line breaks after numbered solutions (1., 2., 3., etc.)
+      formattedAnswer = formattedAnswer.replace(/(\d+\.\s[^<]*?)(?=\d+\.|$)/g, '$1<br><br>');
+      
+      // Extract variable IDs from the response and add them to variable names
+      // Look for patterns like "variable name: `B19013_001E`" and enhance them
+      formattedAnswer = formattedAnswer.replace(/variable name:\s*`([^`]+)`/gi, (match, varId) => {
+        // Find the corresponding variable in relevant_variables
+        const variable = relevantVariables.find(v => v.id === varId);
+        if (variable) {
+          return `variable name: <strong>${varId}</strong> (${variable.name})`;
+        }
+        return `variable name: <strong>${varId}</strong>`;
+      });
+      
+      // Also enhance any standalone variable IDs in backticks (including full variable IDs like B19013_001E)
+      formattedAnswer = formattedAnswer.replace(/`([A-Z]\d+[A-Z]?\d*[A-Z]?_\d+[A-Z]?)`/g, '<strong>$1</strong>');
+      
+      // And enhance shorter table IDs in backticks
+      formattedAnswer = formattedAnswer.replace(/`([A-Z]\d+[A-Z]?\d*[A-Z]?)`/g, '<strong>$1</strong>');
+      
+      return formattedAnswer;
+    }
+
+    function askChatGPT(question, isReply = false) {
       if (question.length < 3) {
-        chatgptAnswer.style.display = 'none';
+        if (!isReply) {
+          chatgptConversation.style.display = 'none';
+          chatgptReplyContainer.style.display = 'none';
+        }
         return;
       }
 
+      // Add user message to conversation
+      addMessageToConversation('user', question);
+      
       // Show spinner
-      chatgptSpinner.style.display = 'block';
-      chatgptAnswer.style.display = 'none';
+      if (isReply) {
+        chatgptReplySpinner.style.display = 'block';
+      } else {
+        chatgptSpinner.style.display = 'block';
+      }
+      
+      // Show conversation and reply container
+      chatgptConversation.style.display = 'block';
+      chatgptReplyContainer.style.display = 'block';
+
+      // Add to conversation history
+      conversationHistory.push({ role: 'user', content: question });
 
       fetch('/api/ask-chatgpt', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ question: question })
+        body: JSON.stringify({ 
+          question: question,
+          conversation_history: conversationHistory.slice(-10) // Send last 10 messages for context
+        })
       })
       .then(response => response.json())
       .then(data => {
         // Hide spinner
-        chatgptSpinner.style.display = 'none';
+        if (isReply) {
+          chatgptReplySpinner.style.display = 'none';
+        } else {
+          chatgptSpinner.style.display = 'none';
+        }
         
         if (data.error) {
           console.error('ChatGPT error:', data.error);
-          chatgptResponse.innerHTML = `<div style="color: #c5221f;">Error: ${data.error}</div>`;
+          addMessageToConversation('assistant', `<div style="color: #c5221f;">Error: ${data.error}</div>`);
         } else {
-          // Display the answer with line breaks after numbered solutions and variable IDs
-          let formattedAnswer = data.answer;
+          const formattedAnswer = formatChatGPTResponse(data.answer, data.relevant_variables);
+          addMessageToConversation('assistant', formattedAnswer, data.relevant_variables);
           
-          // Add line breaks after numbered solutions (1., 2., 3., etc.)
-          formattedAnswer = formattedAnswer.replace(/(\d+\.\s[^<]*?)(?=\d+\.|$)/g, '$1<br><br>');
-          
-          // Extract variable IDs from the response and add them to variable names
-          // Look for patterns like "variable name: `B19013_001E`" and enhance them
-          formattedAnswer = formattedAnswer.replace(/variable name:\s*`([^`]+)`/gi, (match, varId) => {
-            // Find the corresponding variable in relevant_variables
-            const variable = data.relevant_variables.find(v => v.id === varId);
-            if (variable) {
-              return `variable name: <strong>${varId}</strong> (${variable.name})`;
-            }
-            return `variable name: <strong>${varId}</strong>`;
-          });
-          
-          // Also enhance any standalone variable IDs in backticks (including full variable IDs like B19013_001E)
-          formattedAnswer = formattedAnswer.replace(/`([A-Z]\d+[A-Z]?\d*[A-Z]?_\d+[A-Z]?)`/g, '<strong>$1</strong>');
-          
-          // And enhance shorter table IDs in backticks
-          formattedAnswer = formattedAnswer.replace(/`([A-Z]\d+[A-Z]?\d*[A-Z]?)`/g, '<strong>$1</strong>');
-          
-          chatgptResponse.innerHTML = formattedAnswer;
-          
-          // Display relevant variables
-          if (data.relevant_variables && data.relevant_variables.length > 0) {
-            chatgptVariables.innerHTML = `
-              <h4>Relevant Variables:</h4>
-              ${data.relevant_variables.map(variable => `
-                <div class="chatgpt-variable-item" onclick="addTableId('${variable.group}')">
-                  <div class="chatgpt-variable-id">${variable.id}</div>
-                  <div>${variable.name}</div>
-                  <div style="color: #5f6368; font-size: 11px;">${variable.concept}</div>
-                </div>
-              `).join('')}
-            `;
-          } else {
-            chatgptVariables.innerHTML = '';
-          }
+          // Add to conversation history
+          conversationHistory.push({ role: 'assistant', content: data.answer });
         }
         
-        chatgptAnswer.style.display = 'block';
+        // Clear the input
+        if (isReply) {
+          chatgptReplyInput.value = '';
+        } else {
+          chatgptInput.value = '';
+        }
       })
       .catch(error => {
         // Hide spinner
-        chatgptSpinner.style.display = 'none';
+        if (isReply) {
+          chatgptReplySpinner.style.display = 'none';
+        } else {
+          chatgptSpinner.style.display = 'none';
+        }
         
         console.error('ChatGPT request failed:', error);
-        chatgptResponse.innerHTML = '<div style="color: #c5221f;">Request failed. Please try again.</div>';
-        chatgptAnswer.style.display = 'block';
+        addMessageToConversation('assistant', '<div style="color: #c5221f;">Request failed. Please try again.</div>');
       });
     }
 
@@ -1201,9 +1306,10 @@ Tokens: <code>B01001</code> (totals), <code>B01001_003</code> (specific), <code>
         const question = this.value.trim();
         
         if (question.length >= 3) {
-          chatgptTimeout = setTimeout(() => askChatGPT(question), 1000);
+          chatgptTimeout = setTimeout(() => askChatGPT(question, false), 1000);
         } else {
-          chatgptAnswer.style.display = 'none';
+          chatgptConversation.style.display = 'none';
+          chatgptReplyContainer.style.display = 'none';
         }
       });
 
@@ -1213,7 +1319,30 @@ Tokens: <code>B01001</code> (totals), <code>B01001_003</code> (specific), <code>
           clearTimeout(chatgptTimeout);
           const question = this.value.trim();
           if (question.length >= 3) {
-            askChatGPT(question);
+            askChatGPT(question, false);
+          }
+        }
+      });
+    }
+
+    // Set up ChatGPT reply input event listener
+    if (chatgptReplyInput) {
+      chatgptReplyInput.addEventListener('input', function() {
+        clearTimeout(chatgptReplyTimeout);
+        const question = this.value.trim();
+        
+        if (question.length >= 3) {
+          chatgptReplyTimeout = setTimeout(() => askChatGPT(question, true), 1000);
+        }
+      });
+
+      // Also trigger on Enter key
+      chatgptReplyInput.addEventListener('keypress', function(e) {
+        if (e.key === 'Enter') {
+          clearTimeout(chatgptReplyTimeout);
+          const question = this.value.trim();
+          if (question.length >= 3) {
+            askChatGPT(question, true);
           }
         }
       });
@@ -1522,7 +1651,7 @@ Tokens: <code>B01001</code> (totals), <code>B01001_003</code> (specific), <code>
     return resp
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=8000)
+    app.run(host="0.0.0.0", port=8000, debug=True)
 
 # Render.com config health check
 @app.get("/healthz")
