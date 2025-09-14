@@ -182,8 +182,9 @@ def build_csv_for_year(year, geo, tables, include_moe, api_key, county_name=None
         for calc in calculations:
             numerator = calc.get('numerator')
             denominator = calc.get('denominator')
+            operator = calc.get('operator', '÷')  # Default to division for backward compatibility
             calc_name = calc.get('name')
-            print(f"Processing calculation: {numerator} / {denominator} = {calc_name}")
+            print(f"Processing calculation: {numerator} {operator} {denominator} = {calc_name}")
             
             # Check if the variables exist directly in headers
             print(f"Checking if variables exist in headers: {numerator} in {headers_all} = {numerator in headers_all}")
@@ -197,10 +198,17 @@ def build_csv_for_year(year, geo, tables, include_moe, api_key, county_name=None
                         num_val = float(rec.get(numerator, 0) or 0)
                         den_val = float(rec.get(denominator, 0) or 0)
                         
-                        if den_val != 0:
-                            calc_val = num_val / den_val
+                        # Perform the calculation based on operator
+                        if operator == '÷':
+                            calc_val = num_val / den_val if den_val != 0 else 0
+                        elif operator == '×':
+                            calc_val = num_val * den_val
+                        elif operator == '+':
+                            calc_val = num_val + den_val
+                        elif operator == '-':
+                            calc_val = num_val - den_val
                         else:
-                            calc_val = 0  # Handle division by zero
+                            calc_val = num_val / den_val if den_val != 0 else 0  # Default to division
                         
                         rec[calc_name] = calc_val
                     except (ValueError, TypeError):
@@ -392,7 +400,7 @@ def index():
       color: #202124;
     }
     .container {
-      max-width: 670px;
+      max-width: 770px;
       margin: 40px auto;
       padding: 0 24px;
     }
@@ -424,27 +432,42 @@ def index():
     }
     .calculation-row {
       display: flex;
-      align-items: center;
-      gap: 6px;
-      margin-bottom: 8px;
-      padding: 8px;
+      flex-direction: column;
+      gap: 8px;
+      margin-bottom: 12px;
+      padding: 12px;
       border: 1px solid #e8eaed;
       border-radius: 4px;
       background: #f8f9fa;
+    }
+    .calc-line {
+      display: flex;
+      align-items: center;
+      gap: 6px;
       flex-wrap: wrap;
     }
     .calculation-row select {
       flex: 1;
       margin: 0;
-      min-width: 100px;
-      max-width: 150px;
+      min-width: 120px;
     }
     .calculation-row input {
       flex: 1.5;
       margin: 0;
       min-width: 120px;
     }
-    .calc-operator, .calc-equals {
+    .calc-operator {
+      font-weight: bold;
+      color: #5f6368;
+      font-size: 16px;
+      width: 60px !important;
+      min-width: 60px !important;
+      max-width: 60px !important;
+      text-align: center;
+      padding: 8px 22px 8px 0px !important;
+      flex-shrink: 0;
+    }
+    .calc-equals {
       font-weight: bold;
       color: #5f6368;
       font-size: 18px;
@@ -465,17 +488,29 @@ def index():
     .btn-remove-calc {
       background: #ea4335;
       color: white;
-      border: none;
-      width: 24px;
-      height: 24px;
-      border-radius: 50%;
+      border: 1px solid #ea4335;
+      border-radius: 4px;
       cursor: pointer;
-      font-size: 16px;
+      font-size: 14px;
+      font-weight: 500;
       line-height: 1;
       flex-shrink: 0;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      margin-left: 4px;
+      margin-top: 0px;
+      transition: all 0.2s ease;
+      padding: 13px 16px 14px 16px;
+      font-family: inherit;
+      white-space: nowrap;
+      width: auto;
+      vertical-align: top;
+      box-sizing: border-box;
     }
     .btn-remove-calc:hover {
       background: #d33b2c;
+      transform: scale(1.05);
     }
     label {
       display: block;
@@ -741,22 +776,33 @@ Tokens: <code>B01001</code> (totals), <code>B01001_003</code> (specific), <code>
         <label>Calculations (Optional)</label>
         <div id="calculations">
           <div class="calculation-row">
-            <select class="calc-numerator-table" data-type="numerator">
-              <option value="">Numerator Table</option>
-            </select>
-            <select class="calc-numerator-var">
-              <option value="">Numerator Variable</option>
-            </select>
-            <span class="calc-operator">÷</span>
-            <select class="calc-denominator-table" data-type="denominator">
-              <option value="">Denominator Table</option>
-            </select>
-            <select class="calc-denominator-var">
-              <option value="">Denominator Variable</option>
-            </select>
-            <span class="calc-equals">=</span>
-            <input type="text" class="calc-name" placeholder="Calculation name (e.g., Percent Black)" maxlength="50">
-            <button type="button" class="btn-remove-calc" onclick="removeCalculation(this)" style="display:none;">×</button>
+            <div class="calc-line">
+              <select class="calc-numerator-table" data-type="numerator">
+                <option value="">Table 1</option>
+              </select>
+              <select class="calc-numerator-var">
+                <option value="">Variable</option>
+              </select>
+              <select class="calc-operator">
+                <option value="÷">÷</option>
+                <option value="×">×</option>
+                <option value="+">+</option>
+                <option value="-">-</option>
+              </select>
+            </div>
+            <div class="calc-line">
+              <select class="calc-denominator-table" data-type="denominator">
+                <option value="">Table 2</option>
+              </select>
+              <select class="calc-denominator-var">
+                <option value="">Variable</option>
+              </select>
+              <span class="calc-equals">=</span>
+            </div>
+            <div class="calc-line">
+              <input type="text" class="calc-name" placeholder="Calculation name (e.g., Percent Black)" maxlength="50">
+              <button type="button" class="btn-remove-calc" onclick="removeCalculation(this)" style="display:none;">Delete calculation</button>
+            </div>
           </div>
         </div>
         <button type="button" onclick="addCalculation()" class="btn-add-calc">+ Add Calculation</button>
@@ -956,7 +1002,7 @@ Tokens: <code>B01001</code> (totals), <code>B01001_003</code> (specific), <code>
       [...numeratorTableSelects, ...denominatorTableSelects].forEach(select => {
         const currentValue = select.value;
         const isNumerator = select.classList.contains('calc-numerator-table');
-        const placeholder = isNumerator ? 'Numerator Table' : 'Denominator Table';
+        const placeholder = isNumerator ? 'Table 1' : 'Table 2';
         
         select.innerHTML = `<option value="">${placeholder}</option>`;
         
@@ -1045,22 +1091,33 @@ Tokens: <code>B01001</code> (totals), <code>B01001_003</code> (specific), <code>
       const newRow = document.createElement('div');
       newRow.className = 'calculation-row';
       newRow.innerHTML = 
-        '<select class="calc-numerator-table" data-type="numerator">' +
-          '<option value="">Numerator Table</option>' +
-        '</select>' +
-        '<select class="calc-numerator-var">' +
-          '<option value="">Numerator Variable</option>' +
-        '</select>' +
-        '<span class="calc-operator">÷</span>' +
-        '<select class="calc-denominator-table" data-type="denominator">' +
-          '<option value="">Denominator Table</option>' +
-        '</select>' +
-        '<select class="calc-denominator-var">' +
-          '<option value="">Denominator Variable</option>' +
-        '</select>' +
-        '<span class="calc-equals">=</span>' +
-        '<input type="text" class="calc-name" placeholder="Calculation name (e.g., Percent Black)" maxlength="50">' +
-        '<button type="button" class="btn-remove-calc" onclick="removeCalculation(this)">×</button>';
+        '<div class="calc-line">' +
+          '<select class="calc-numerator-table" data-type="numerator">' +
+            '<option value="">Table 1</option>' +
+          '</select>' +
+          '<select class="calc-numerator-var">' +
+            '<option value="">Variable</option>' +
+          '</select>' +
+          '<select class="calc-operator">' +
+            '<option value="÷">÷</option>' +
+            '<option value="×">×</option>' +
+            '<option value="+">+</option>' +
+            '<option value="-">-</option>' +
+          '</select>' +
+        '</div>' +
+        '<div class="calc-line">' +
+          '<select class="calc-denominator-table" data-type="denominator">' +
+            '<option value="">Table 2</option>' +
+          '</select>' +
+          '<select class="calc-denominator-var">' +
+            '<option value="">Variable</option>' +
+          '</select>' +
+          '<span class="calc-equals">=</span>' +
+        '</div>' +
+        '<div class="calc-line">' +
+          '<input type="text" class="calc-name" placeholder="Calculation name (e.g., Percent Black)" maxlength="50">' +
+          '<button type="button" class="btn-remove-calc" onclick="removeCalculation(this)">Delete calculation</button>' +
+        '</div>';
       
       calculationsDiv.appendChild(newRow);
       updateCalculationOptions();
@@ -1092,23 +1149,27 @@ Tokens: <code>B01001</code> (totals), <code>B01001_003</code> (specific), <code>
       calculationRows.forEach((row, index) => {
         const numeratorVarSelect = row.querySelector('.calc-numerator-var');
         const denominatorVarSelect = row.querySelector('.calc-denominator-var');
+        const operatorSelect = row.querySelector('.calc-operator');
         const nameInput = row.querySelector('.calc-name');
         
         console.log(`Row ${index}:`, {
           numerator: numeratorVarSelect ? numeratorVarSelect.value : 'not found',
           denominator: denominatorVarSelect ? denominatorVarSelect.value : 'not found',
+          operator: operatorSelect ? operatorSelect.value : 'not found',
           name: nameInput ? nameInput.value : 'not found'
         });
         
-        if (numeratorVarSelect && denominatorVarSelect && nameInput) {
+        if (numeratorVarSelect && denominatorVarSelect && operatorSelect && nameInput) {
           const numerator = numeratorVarSelect.value;
           const denominator = denominatorVarSelect.value;
+          const operator = operatorSelect.value;
           const name = nameInput.value;
           
-          if (numerator && denominator && name) {
+          if (numerator && denominator && operator && name) {
             calculations.push({
               numerator: numerator,
               denominator: denominator,
+              operator: operator,
               name: name
             });
           }
