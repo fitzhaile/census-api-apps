@@ -1,5 +1,5 @@
 from flask import Flask, request, jsonify, send_file
-import csv, io, time, requests, zipfile, os
+import csv, io, time, requests, zipfile, os, sqlite3
 from acs_database import ACSDatabase
 import openai
 from dotenv import load_dotenv
@@ -8,6 +8,11 @@ from dotenv import load_dotenv
 load_dotenv()
 
 app = Flask(__name__)
+
+# Serve static files from assets directory
+@app.route('/assets/<path:filename>')
+def serve_static(filename):
+    return send_file(f'assets/{filename}')
 
 CENSUS_BASE = "https://api.census.gov/data"
 DATASET = "acs/acs5"
@@ -108,6 +113,43 @@ def build_geo_params(geo, county_name=None):
     if geo == "block group":
         return {"for": "block group:*", "in": f"state:{STATE_FIPS} county:{county_fips} tract:*"}
     raise ValueError("Invalid geo")
+
+def get_actual_data_values(variable_ids, year=2023, county_name="Chatham"):
+    """Query actual data values from comprehensive_acs_data.db"""
+    try:
+        conn = sqlite3.connect('comprehensive_acs_data.db')
+        cursor = conn.cursor()
+        
+        # Create placeholders for the IN clause
+        placeholders = ','.join(['?' for _ in variable_ids])
+        
+        query = f'''
+            SELECT variable_id, value, county_name
+            FROM acs_data 
+            WHERE variable_id IN ({placeholders})
+            AND year = ?
+            AND county_name LIKE ?
+        '''
+        
+        params = variable_ids + [year, f'%{county_name}%']
+        cursor.execute(query, params)
+        results = cursor.fetchall()
+        
+        conn.close()
+        
+        # Convert to dictionary for easy lookup
+        data_values = {}
+        for var_id, value, county in results:
+            data_values[var_id] = {
+                'value': value,
+                'county': county
+            }
+        
+        return data_values
+        
+    except Exception as e:
+        print(f"Error querying data values: {e}")
+        return {}
 
 def parse_years(value, default=2023):
     try:
@@ -385,7 +427,7 @@ def search_variables():
 
 @app.route('/api/ask-chatgpt', methods=['POST'])
 def ask_chatgpt():
-    """Ask ChatGPT questions about ACS data using the database"""
+    """Ask ChatGPT questions about ACS data using the SQLite database exclusively"""
     if not OPENAI_API_KEY:
         return jsonify({"error": "OpenAI API key not configured"}), 503
     
@@ -400,37 +442,193 @@ def ask_chatgpt():
         if not question:
             return jsonify({"error": "No question provided"}), 400
         
-        # Search the database for relevant variables
-        search_results = acs_db.search_variables(question, limit=10)
+        # Check if clarification is needed for truly ambiguous queries (like ChatGPT)
+        question_lower = question.lower()
+        
+        # If the query is very general (like "median household income"), ask for clarification
+        if (len(question.strip()) < 20 and 
+            any(term in question_lower for term in ['income', 'population', 'housing', 'education', 'employment']) and
+            not any(county in question_lower for county in ['chatham', 'liberty', 'bryan', 'effingham']) and
+            not any(location in question_lower for location in ['county', 'georgia', 'ga', 'state', 'us', 'united states'])):
+            
+            clarification_message = "I'd be happy to help with that data! Could you specify which location you're interested in? For example:\n\n• A specific county (Chatham, Liberty, Bryan, or Effingham)\n• Georgia state data\n• U.S. national data\n\nOr if you're looking for a specific time period, let me know that too (2023)."
+            
+            return jsonify({
+                "answer": clarification_message,
+                "relevant_variables": [],
+                "total_found": 0,
+                "displayed_count": 0
+            })
+        
+        # Intelligent search based on conversation context
+        question_lower = question.lower()
+        
+        # Extract year and county from the question and conversation history
+        requested_year = None
+        requested_county = None
+        
+        # Check current question for year and county
+        for year in ['2017', '2018', '2019', '2020', '2021', '2022', '2023']:
+            if year in question_lower:
+                requested_year = int(year)
+                break
+        
+        for county in ['chatham', 'liberty', 'bryan', 'effingham']:
+            if county in question_lower:
+                requested_county = county.title()
+                break
+        
+        # If not found in current question, check conversation history
+        if not requested_year or not requested_county:
+            for msg in conversation_history:
+                msg_lower = msg.get('content', '').lower()
+                if not requested_year:
+                    for year in ['2017', '2018', '2019', '2020', '2021', '2022', '2023']:
+                        if year in msg_lower:
+                            requested_year = int(year)
+                            break
+                if not requested_county:
+                    for county in ['chatham', 'liberty', 'bryan', 'effingham']:
+                        if county in msg_lower:
+                            requested_county = county.title()
+                            break
+        
+        # Only proceed if we have enough context from the query or conversation
+        if not requested_year and not requested_county:
+            # If we have no context at all, ask for clarification
+            clarification_message = "I'd be happy to help with that data! Could you specify which location you're interested in? For example:\n\n• A specific county (Chatham, Liberty, Bryan, or Effingham)\n• Georgia state data\n• U.S. national data\n\nOr if you're looking for a specific time period, let me know that too (2023)."
+            
+            return jsonify({
+                "answer": clarification_message,
+                "relevant_variables": [],
+                "total_found": 0,
+                "displayed_count": 0
+            })
+        
+        # Set defaults only if we have some context
+        if not requested_year:
+            requested_year = 2023
+        if not requested_county:
+            requested_county = "Chatham"
+        
+        # For median household income, prioritize the main variable
+        if 'median household income' in question_lower:
+            search_results = acs_db.search_variables('B19013_001E', limit=1)
+            if not search_results:
+                search_results = acs_db.search_variables('median household income', limit=2)
+        else:
+            # For other queries, do a simple search
+            search_results = acs_db.search_variables(question, limit=3)
+        
+        all_results = search_results
+        
+        # Simple filtering - just keep the results we found
+        filtered_results = all_results
+        
+        # Keep only estimate variables (ending in E)
+        estimate_variables = []
+        for var_id, name, concept, group_name, year in filtered_results:
+            if var_id.endswith('E'):
+                estimate_variables.append((var_id, name, concept, group_name, year))
         
         # Format the search results for ChatGPT
         context_data = []
-        for var_id, name, concept, group_name, year in search_results:
-            context_data.append({
+        total_found = len(estimate_variables)
+        displayed_count = min(5, total_found)  # Limit to 5 most relevant variables
+        
+        # Extract year and county from the question
+        question_lower = question.lower()
+        requested_year = 2023  # Default
+        requested_county = "Chatham"  # Default
+        
+        # Extract year from question
+        for year in ['2017', '2018', '2019', '2020', '2021', '2022', '2023']:
+            if year in question_lower:
+                requested_year = int(year)
+                break
+        
+        # Extract county from question
+        for county in ['chatham', 'liberty', 'bryan', 'effingham']:
+            if county in question_lower:
+                requested_county = county.title()
+                break
+        
+        # Get actual data values for the variables
+        variable_ids = [var_id for var_id, _, _, _, _ in estimate_variables]
+        actual_data = get_actual_data_values(variable_ids, year=requested_year, county_name=requested_county)
+        
+        for var_id, name, concept, group_name, year in estimate_variables[:5]:  # Take first 5 variables
+            var_data = {
                 'id': var_id,
                 'name': name,
                 'concept': concept,
                 'group': group_name,
                 'year': year
-            })
+            }
+            
+            # Add actual data value if available
+            if var_id in actual_data:
+                var_data['actual_value'] = actual_data[var_id]['value']
+                var_data['county'] = actual_data[var_id]['county']
+                context_data.append(var_data)  # Only add if we have actual data
         
-        # Create context for ChatGPT
-        context = f"""You are an expert on the American Community Survey (ACS) data. 
-        
-Here are some relevant ACS variables from the database that might help answer the user's question:
+        # Create conversational context for ChatGPT
+        context = f"""You are a helpful Census data assistant. You have access to American Community Survey (ACS) 5-year average data.
 
-{chr(10).join([f"- {var['id']}: {var['name']} (Concept: {var['concept']}, Group: {var['group']})" for var in context_data])}
+IMPORTANT CONTEXT:
+- When users specify a year (like "2021"), they mean the 5-year average ending in that year
+- For example, "2021" means the 5-year average from 2017-2021
+- All data is 5-year averages for better reliability in smaller areas
+- Available counties: Chatham, Liberty, Bryan, Effingham
+- Available years: 2017-2023 (all as 5-year averages)
+- ALWAYS provide estimate values (ending in E) - ignore margin of error completely
+- When mentioning years, just say the year (e.g., "2023") not the range (e.g., "2019-2023")
 
-Please answer the user's question about ACS data. If you need more specific information about variables, suggest the user search for them using the search functionality. Be helpful and accurate.
+CURRENT REQUEST:
+- County: {requested_county}
+- Year: {requested_year} (5-year average)
+- User's question: {question}
 
-User's question: {question}"""
+AVAILABLE DATA:
+{chr(10).join([f"- {var['id']}: {var['name']}" + (f" (Value: {var.get('actual_value', 'N/A')})" if 'actual_value' in var else " (No data available)") for var in context_data])}
+
+INSTRUCTIONS:
+- Be conversational and helpful like ChatGPT
+- If data is available, provide it clearly
+- If data is not available, explain why and suggest alternatives
+- Ask follow-up questions when helpful
+- Understand context from the conversation history
+- When users say a year, assume they mean 5-year average ending in that year
+- ALWAYS use estimate values, never mention margin of error
+- When referencing years, use just the year (e.g., "2023") not ranges
+
+Respond naturally and helpfully to the user's question."""
         
         # Initialize OpenAI client
         client = openai.OpenAI(api_key=OPENAI_API_KEY)
         
         # Build messages array with conversation history
         messages = [
-            {"role": "system", "content": "You are a helpful assistant specializing in American Community Survey (ACS) data and Census statistics."}
+            {"role": "system", "content": """You are a helpful Census data assistant. Be conversational and intelligent like ChatGPT.
+
+INSTRUCTIONS:
+- Understand conversation context and follow-up questions
+- When users specify a year, assume they mean 5-year average ending in that year
+- If data is available, provide it clearly with context
+- If data is not available, explain why and suggest alternatives
+- Ask follow-up questions when helpful
+- Be conversational and helpful, not robotic
+- ALWAYS provide estimate values (ending in E) - ignore margin of error completely
+- When mentioning years, just say the year (e.g., "2023") not the range (e.g., "2019-2023")
+- Format data clearly with proper formatting:
+  * Use **bold** for important numbers and key terms
+  * Use bullet points (•) for lists
+  * Use line breaks for readability
+  * Format currency as $XX,XXX
+  * Format large numbers with commas (e.g., 295,291)
+- Understand that users might provide clarification in follow-up messages
+
+Be helpful, intelligent, and conversational like ChatGPT with proper text formatting."""}
         ]
         
         # Add conversation history (limit to last 10 messages to avoid token limits)
@@ -440,19 +638,20 @@ User's question: {question}"""
         # Add current question
         messages.append({"role": "user", "content": context})
         
-        # Call ChatGPT API
+        # Call ChatGPT API with GPT-5 for advanced understanding
         response = client.chat.completions.create(
-            model="gpt-3.5-turbo-16k",  # Using 16k model which might have different pricing
-            messages=messages,
-            max_tokens=300,  # Reduced tokens to save costs
-            temperature=0.7
+            model="gpt-5",  # Most advanced model for better understanding
+            messages=messages
+            # GPT-5 uses default parameters (no max_tokens, temperature=1.0)
         )
         
         answer = response.choices[0].message.content
         
         return jsonify({
             "answer": answer,
-            "relevant_variables": context_data
+            "relevant_variables": context_data,
+            "total_found": total_found,
+            "displayed_count": displayed_count
         })
         
     except Exception as e:
@@ -468,524 +667,113 @@ def index():
   <title>ACS 5-year Downloader - Chatham County, GA</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <meta http-equiv="Cache-Control" content="no-store" />
-  <style>
-    * {
-      box-sizing: border-box;
-    }
-    body {
-      font-family: 'Google Sans', 'Roboto', Arial, sans-serif;
-      margin: 0;
-      padding: 0;
-      background: linear-gradient(135deg, #e3f2fd 0%, #f3e5f5 100%);
-      min-height: 100vh;
-      color: #202124;
-    }
-    .container {
-      max-width: 920px;
-      margin: 40px auto;
-      padding: 0 24px;
-    }
-    .card {
-      background: white;
-      border-radius: 8px;
-      box-shadow: 0 1px 3px rgba(60,64,67,0.3), 0 4px 8px 3px rgba(60,64,67,0.15);
-      padding: 48px 40px;
-      border: 1px solid #dadce0;
-      border-top: 4px solid #1a73e8;
-    }
-    h1 {
-      font-size: 32px;
-      font-weight: 400;
-      color: #202124;
-      margin: 0 0 8px 0;
-      text-align: center;
-      letter-spacing: 0;
-    }
-    .subtitle {
-      color: #5f6368;
-      text-align: center;
-      margin: 0 0 40px 0;
-      line-height: 1.5;
-      font-size: 16px;
-    }
-    .form-group {
-      margin-bottom: 24px;
-    }
-    .calculation-row {
-      display: flex;
-      flex-direction: column;
-      gap: 8px;
-      margin-bottom: 12px;
-      padding: 12px;
-      border: 1px solid #e8eaed;
-      border-radius: 4px;
-      background: #f8f9fa;
-    }
-    .calc-line {
-      display: flex;
-      align-items: center;
-      gap: 6px;
-      flex-wrap: wrap;
-    }
-    .calculation-row select {
-      flex: 1;
-      margin: 0;
-      min-width: 120px;
-    }
-    .calculation-row input {
-      flex: 1.5;
-      margin: 0;
-      min-width: 120px;
-    }
-    .calc-operator {
-      font-weight: bold;
-      color: #5f6368;
-      font-size: 16px;
-      width: 60px !important;
-      min-width: 60px !important;
-      max-width: 60px !important;
-      text-align: center;
-      padding: 8px 22px 8px 0px !important;
-      flex-shrink: 0;
-    }
-    .calc-equals {
-      font-weight: bold;
-      color: #5f6368;
-      font-size: 18px;
-    }
-    .btn-add-calc {
-      background: #4285f4;
-      color: white;
-      border: none;
-      padding: 8px 16px;
-      border-radius: 4px;
-      cursor: pointer;
-      font-size: 14px;
-      margin-top: 8px;
-    }
-    .btn-add-calc:hover {
-      background: #3367d6;
-    }
-    .btn-remove-calc {
-      background: #ea4335;
-      color: white;
-      border: 1px solid #ea4335;
-      border-radius: 4px;
-      cursor: pointer;
-      font-size: 14px;
-      font-weight: 500;
-      line-height: 1;
-      flex-shrink: 0;
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      margin-left: 4px;
-      margin-top: 0px;
-      transition: all 0.2s ease;
-      padding: 13px 16px 14px 16px;
-      font-family: inherit;
-      white-space: nowrap;
-      width: auto;
-      vertical-align: top;
-      box-sizing: border-box;
-    }
-    .btn-remove-calc:hover {
-      background: #d33b2c;
-      transform: scale(1.05);
-    }
-    label {
-      display: block;
-      font-weight: 600;
-      color: #5f6368;
-      margin-bottom: 8px;
-      font-size: 14px;
-      letter-spacing: 0.25px;
-    }
-    input, select {
-      width: 100%;
-      padding: 12px 16px;
-      border: 1px solid #dadce0;
-      border-radius: 4px;
-      font-size: 16px;
-      transition: border-color 0.2s ease;
-      background: white;
-      font-family: inherit;
-    }
-    select {
-      padding-right: 40px;
-      background-image: url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath fill='none' stroke='%23666' stroke-linecap='round' stroke-linejoin='round' stroke-width='2' d='M2 5l6 6 6-6'/%3E%3C/svg%3E");
-      background-repeat: no-repeat;
-      background-position: right 12px center;
-      background-size: 16px;
-      appearance: none;
-    }
-    input:focus, select:focus {
-        outline: none;
-        border-color: #1a73e8;
-        border-width: 2px;
-        padding: 11px 15px;
-    }
-    select:focus {
-        padding-right: 39px;
-    }
-    
-    ::placeholder {
-        color: #aaa; 
-    }
-
-    .row {
-      display: flex;
-      gap: 16px;
-    }
-    .row .form-group {
-      flex: 1;
-    }
-    button {
-      width: 100%;
-      background: #1a73e8;
-      color: white;
-      border: none;
-      padding: 12px 24px;
-      border-radius: 4px;
-      font-size: 14px;
-      font-weight: 500;
-      cursor: pointer;
-      transition: all 0.2s ease;
-      margin-top: 16px;
-      text-transform: none;
-      letter-spacing: 0.25px;
-      font-family: inherit;
-    }
-
-    button:hover {
-      background: #1557b0;
-      box-shadow: 0 1px 2px 0 rgba(60,64,67,0.3), 0 1px 3px 1px rgba(60,64,67,0.15);
-    }
-    button:active {
-      background: #1557b0;
-      box-shadow: 0 1px 2px 0 rgba(60,64,67,0.3), 0 2px 6px 2px rgba(60,64,67,0.15);
-    }
-    .help-text {
-      font-size: 12px;
-      color: #606265;
-      margin-top: 8px;
-      line-height: 1.4;
-    }
-    code {
-      background: #f1f3f4;
-      color: #c5221f;
-      padding: 2px 4px;
-      border-radius: 2px;
-      font-family: 'Roboto Mono', monospace;
-      font-size: 12px;
-    }
-    .progress {
-      margin-top: 24px;
-      height: 4px;
-      width: 100%;
-      background: #e8eaed;
-      border-radius: 2px;
-      overflow: hidden;
-      display: none;
-    }
-    .progress-bar {
-      height: 100%;
-      width: 0%;
-      background: #1a73e8;
-      transition: width .3s ease;
-    }
-    .progress-text {
-      margin-top: 8px;
-      color: #5f6368;
-      font-size: 12px;
-      display: none;
-    }
-    #msg {
-      margin-top: 16px;
-      color: #5f6368;
-      font-size: 14px;
-    }
-    .search-container {
-      position: relative;
-    }
-    .search-spinner {
-      position: absolute;
-      right: 12px;
-      top: 50%;
-      transform: translateY(-50%);
-      width: 16px;
-      height: 16px;
-      border: 2px solid #e8eaed;
-      border-top: 2px solid #1a73e8;
-      border-radius: 50%;
-      animation: spin 1s linear infinite;
-      display: none;
-    }
-    @keyframes spin {
-      0% { transform: translateY(-50%) rotate(0deg); }
-      100% { transform: translateY(-50%) rotate(360deg); }
-    }
-    .search-results {
-      position: absolute;
-      top: 100%;
-      left: 0;
-      right: 0;
-      background: white;
-      border: 1px solid #dadce0;
-      border-top: none;
-      border-radius: 0 0 4px 4px;
-      max-height: 200px;
-      overflow-y: auto;
-      z-index: 1000;
-      display: none;
-      box-shadow: 0 2px 8px rgba(60,64,67,0.15);
-    }
-    .search-result-item {
-      padding: 12px 16px;
-      cursor: pointer;
-      border-bottom: 1px solid #f1f3f4;
-      transition: background-color 0.2s ease;
-    }
-    .search-result-item:hover {
-      background-color: #f8f9fa;
-    }
-    .search-result-item:last-child {
-      border-bottom: none;
-    }
-    .search-result-id {
-      font-weight: 600;
-      color: #1a73e8;
-      font-family: 'Roboto Mono', monospace;
-      font-size: 13px;
-    }
-    .search-result-name {
-      color: #202124;
-      font-size: 14px;
-      margin: 2px 0;
-      line-height: 1.4;
-    }
-    .search-result-name .hierarchy-arrow {
-      color: #1a73e8;
-      font-weight: bold;
-      margin: 0 4px;
-    }
-    .search-result-concept {
-      color: #5f6368;
-      font-size: 12px;
-    }
-    .search-result-name strong,
-    .search-result-concept strong {
-      color: #2d2d2d;
-      font-weight: 700;
-    }
-    .chatgpt-conversation {
-      margin-top: 12px;
-      max-height: 400px;
-      overflow-y: auto;
-      border: 1px solid #e8eaed;
-      border-radius: 4px;
-      background: #f8f9fa;
-    }
-    .chatgpt-message {
-      padding: 12px 16px;
-      border-bottom: 1px solid #e8eaed;
-    }
-    .chatgpt-message:last-child {
-      border-bottom: none;
-    }
-    .chatgpt-message.user {
-      background: #e3f2fd;
-      border-left: 4px solid #1a73e8;
-    }
-    .chatgpt-message.assistant {
-      background: white;
-      border-left: 4px solid #34a853;
-    }
-    .chatgpt-message-header {
-      font-size: 12px;
-      color: #5f6368;
-      font-weight: 600;
-      margin-bottom: 6px;
-    }
-    .chatgpt-response {
-      color: #202124;
-      font-size: 14px;
-      line-height: 1.5;
-      margin-bottom: 12px;
-    }
-    .chatgpt-variables {
-      border-top: 1px solid #e8eaed;
-      padding-top: 12px;
-    }
-    .chatgpt-variables h4 {
-      margin: 0 0 8px 0;
-      font-size: 13px;
-      color: #5f6368;
-      font-weight: 600;
-    }
-    .chatgpt-variable-item {
-      padding: 6px 8px;
-      margin: 4px 0;
-      background: white;
-      border: 1px solid #dadce0;
-      border-radius: 3px;
-      font-size: 12px;
-      cursor: pointer;
-      transition: background-color 0.2s ease;
-    }
-    .chatgpt-variable-item:hover {
-      background: #f1f3f4;
-    }
-    .chatgpt-variable-id {
-      font-weight: 600;
-      color: #1a73e8;
-      font-family: 'Roboto Mono', monospace;
-    }
-    .chatgpt-reply-container {
-      margin-top: 8px;
-    }
-    @media (max-width: 600px) {
-      .container {
-        margin: 16px auto;
-        padding: 0 16px;
-      }
-      .card {
-        padding: 24px 16px;
-      }
-      .row {
-        flex-direction: column;
-        gap: 0;
-      }
-      h1 {
-        font-size: 24px;
-      }
-      .subtitle {
-        white-space: pre-line;
-      }
-      select {
-        color: #202124;
-      }
-    }
-  </style>
+  <link rel="stylesheet" href="/assets/styles.css">
 </head>
 <body>
-  <div class="container">
+  <div class="app">
     <div class="card">
-      <h1>ACS Data Downloader (5-yr)</h1>
+      <h1 class="heading heading--primary">ACS Data Downloader (5-yr)</h1>
       <p class="subtitle">Get Census 5-year
-average data for Georgia counties<br>
-Tokens: <code>B01001</code> (totals), <code>B01001_003</code> (specific), <code>B01001_*</code> (full table)</p>
+average data<br>
+Tokens: <code class="code">B01001</code> (totals), <code class="code">B01001_003</code> (specific), <code class="code">B01001_*</code> (full table)</p>
       
-      <div class="form-group">
-        <label>County</label>
-        <select id="county">
-          <option value="Chatham">Chatham</option>
-          <option value="Liberty">Liberty</option>
-          <option value="Bryan">Bryan</option>
-          <option value="Effingham">Effingham</option>
-        </select>
-      </div>
-
-    <div class="row">
-        <div class="form-group">
-          <label>Years</label>
-          <input id="years" type="text" placeholder="2023, or 2018-2023, or 2018,2019,2020">
+      <!-- Manual Data Selection -->
+      <div class="data-selection-container">
+        <div class="data-selection-header">
+          <h3 class="data-selection-title">Manual Data Selection</h3>
+          <p class="data-selection-subtitle">Specify data fields manually to download ACS data</p>
         </div>
-        <div class="form-group">
-          <label>Include Margin of Error (MOE)</label>
-        <select id="moe">
-          <option value="false" selected>No</option>
-          <option value="true">Yes</option>
-        </select>
-      </div>
-    </div>
+        
+        <div class="form__group">
+          <label class="form__label">County</label>
+          <select id="county" class="form__select">
+            <option value="Chatham">Chatham</option>
+            <option value="Liberty">Liberty</option>
+            <option value="Bryan">Bryan</option>
+            <option value="Effingham">Effingham</option>
+          </select>
+        </div>
 
-      <div class="form-group">
-        <label>Output Format (for multiple years)</label>
-        <select id="format">
+        <div class="row">
+          <div class="form__group">
+            <label class="form__label">Years</label>
+            <input id="years" type="text" class="form__input" placeholder="2023, or 2018-2023, or 2018,2019,2020">
+          </div>
+          <div class="form__group">
+            <label class="form__label">Include Margin of Error (MOE)</label>
+            <select id="moe" class="form__select">
+              <option value="false" selected>No</option>
+              <option value="true">Yes</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="form__group">
+          <label class="form__label">Search Tables</label>
+          <div class="search">
+            <input id="variable-search" type="text" class="form__input" placeholder="Type to search tables & variables..." autocomplete="off">
+            <div id="search-spinner" class="search__spinner"></div>
+            <div id="search-results" class="search__results"></div>
+          </div>
+          <p class="form__help">Dropdown search for ACS tables. Click to add to Table IDs field.</p>
+        </div>
+
+        <div class="form__group">
+          <label class="form__label">Table IDs</label>
+          <input id="tables" type="text" class="form__input" placeholder="B01001, B19013">
+          <p class="form__help">Separate with spaces or commas. Examples: <code class="code">B01001</code>, <code class="code">B19013</code></p>
+        </div>
+      </div>
+
+        <!-- ChatGPT-like AI Assistant -->
+        <div class="chatgpt-container">
+          <div class="chatgpt-header">
+            <h3 class="chatgpt-title">AI Assistant</h3>
+            <p class="chatgpt-subtitle">Ask questions about ACS data and get intelligent answers</p>
+          </div>
+          
+          <!-- Conversation area -->
+          <div id="chatgpt-conversation" class="chat">
+            <!-- Conversation history will be populated here -->
+          </div>
+          
+          <!-- Thinking indicator -->
+          <div id="chatgpt-thinking" class="chat__thinking" style="display: none;">
+            <div class="chat__thinking-content">
+              <div class="chat__thinking-spinner"></div>
+              <span class="chat__thinking-text">AI is thinking...</span>
+              <div class="chat__thinking-progress">
+                <div class="chat__thinking-dot"></div>
+                <div class="chat__thinking-dot"></div>
+                <div class="chat__thinking-dot"></div>
+              </div>
+            </div>
+          </div>
+          
+          <!-- Input area -->
+          <div class="chatgpt-input">
+            <input id="chatgpt-question" type="text" class="chatgpt-input-field" placeholder="Ask about ACS data..." autocomplete="off">
+            <div id="chatgpt-spinner" class="chatgpt-spinner"></div>
+          </div>
+        </div>
+
+        <!-- Calculation functionality removed from frontend but kept in backend for future use -->
+
+      <div class="form__group">
+        <label class="form__label">Output Format (for multiple years)</label>
+        <select id="format" class="form__select">
           <option value="zip">ZIP archive (separate files)</option>
           <option value="combined" selected>Single CSV (one year per row)</option>
         </select>
-        <p class="help-text">Choose how to organize data when downloading multiple years</p>
+        <p class="form__help">Choose how to organize data when downloading multiple years</p>
       </div>
 
-      <div class="form-group">
-        <label>Search Tables</label>
-        <div class="search-container">
-          <input id="variable-search" type="text" placeholder="Type to search tables & variables..." autocomplete="off">
-          <div id="search-spinner" class="search-spinner"></div>
-          <div id="search-results" class="search-results"></div>
-        </div>
-        <p class="help-text">Dropdown search for ACS tables. Click to add to calculation dropdowns.</p>
-      </div>
+      <button onclick="download()" class="button">Download Data</button>
 
-      <div class="form-group">
-        <label>AI Search all data</label>
-        <div class="search-container">
-          <input id="chatgpt-question" type="text" placeholder="Show me variables for income by race" autocomplete="off">
-          <div id="chatgpt-spinner" class="search-spinner"></div>
-        </div>
-        <div id="chatgpt-conversation" class="chatgpt-conversation" style="display: none;">
-          <!-- Conversation history will be populated here -->
-        </div>
-        <div id="chatgpt-reply-container" class="chatgpt-reply-container" style="display: none;">
-          <div class="search-container">
-            <input id="chatgpt-reply" type="text" placeholder="Reply or ask a follow-up question..." autocomplete="off">
-            <div id="chatgpt-reply-spinner" class="search-spinner"></div>
-          </div>
-        </div>
-        <p class="help-text">Ask questions about ACS data and get AI-powered answers with relevant variables. You can reply to continue the conversation.</p>
-      </div>
+    <div id="progress" class="progress"><div class="progress__bar" id="progressbar"></div></div>
+    <div id="progresstext" class="progress__text">Working...</div>
 
-        <div class="form-group">
-          <label>Table IDs</label>
-          <input id="tables" type="text" placeholder="B01001, B19013">
-          <p class="help-text">Separate with spaces or commas. Examples: <code>B01001</code>, <code>B19013</code></p>
-        </div>
-
-      <div class="form-group">
-        <label>Calculations (Optional)</label>
-        <div id="calculations">
-          <div class="calculation-row">
-            <div class="calc-line">
-              <select class="calc-numerator-table" data-type="numerator">
-                <option value="">Table 1</option>
-              </select>
-              <select class="calc-numerator-var">
-                <option value="">Variable</option>
-              </select>
-              <select class="calc-operator">
-                <option value="÷">÷</option>
-                <option value="×">×</option>
-                <option value="+">+</option>
-                <option value="-">-</option>
-              </select>
-            </div>
-            <div class="calc-line">
-              <select class="calc-denominator-table" data-type="denominator">
-                <option value="">Table 2</option>
-              </select>
-              <select class="calc-denominator-var">
-                <option value="">Variable</option>
-              </select>
-              <span class="calc-equals">=</span>
-            </div>
-            <div class="calc-line">
-              <input type="text" class="calc-name" placeholder="Calculation name (e.g., Percent of total)" maxlength="50">
-              <button type="button" class="btn-remove-calc" onclick="removeCalculation(this)" style="display:none;">Delete calculation</button>
-            </div>
-          </div>
-        </div>
-        <button type="button" onclick="addCalculation()" class="btn-add-calc">+ Add Calculation</button>
-        <p class="help-text">Create calculated fields like percentages and ratios. Both original variables and calculations will be included in the output.</p>
-      </div>
-
-      <button onclick="download()">Download Data</button>
-
-    <div id="progress" class="progress"><div class="progress-bar" id="progressbar"></div></div>
-    <div id="progresstext" class="progress-text">Working...</div>
-
-      <div id="msg"></div>
+      <div id="msg" class="message"></div>
     </div>
   </div>
 
@@ -1020,17 +808,43 @@ Tokens: <code>B01001</code> (totals), <code>B01001_003</code> (specific), <code>
     
     // DOM elements found
 
-    function addTableId(tableId) {
+    function addTableId(tableId, clickedElement = null) {
+      console.log('addTableId called with:', tableId);
       const currentValue = tablesInput.value.trim();
       const tableIds = currentValue ? currentValue.split(/[,\s]+/).filter(id => id) : [];
+      console.log('Current table IDs:', tableIds);
       
       // Check if table ID already exists
       if (!tableIds.includes(tableId)) {
         tableIds.push(tableId);
         tablesInput.value = tableIds.join(' ');
         
-        // Manually trigger updateCalculationOptions since setting value doesn't trigger input event
-        updateCalculationOptions();
+        // Calculation options removed from frontend
+        
+        // Show success feedback
+        const msg = document.getElementById('msg');
+        if (msg) {
+          msg.textContent = `Added table ${tableId} to Table IDs field`;
+          msg.style.color = '#1a73e8';
+          setTimeout(() => {
+            msg.textContent = '';
+          }, 3000);
+        }
+        
+        // Show checkmark feedback next to the clicked element
+        if (clickedElement) {
+          showCheckmarkFeedback(clickedElement);
+        }
+      } else {
+        // Show already exists feedback
+        const msg = document.getElementById('msg');
+        if (msg) {
+          msg.textContent = `Table ${tableId} is already in Table IDs field`;
+          msg.style.color = '#5f6368';
+          setTimeout(() => {
+            msg.textContent = '';
+          }, 2000);
+        }
       }
       
       // Clear search
@@ -1038,11 +852,49 @@ Tokens: <code>B01001</code> (totals), <code>B01001_003</code> (specific), <code>
       searchResults.style.display = 'none';
       searchSpinner.style.display = 'none';
     }
+    
+    function showCheckmarkFeedback(element) {
+      // Find the "Click to add table" text element within the clicked element
+      const clickTextElement = element.querySelector('div[style*="text-decoration: underline"]');
+      if (!clickTextElement) return;
+      
+      // Create checkmark feedback element
+      const feedback = document.createElement('span');
+      feedback.innerHTML = '&nbsp;&nbsp;&nbsp;✓ added';
+      feedback.style.cssText = `
+        color: #34a853;
+        font-weight: 600;
+        font-size: 12px;
+        opacity: 0;
+        transition: opacity 0.3s ease;
+        display: inline;
+        text-decoration: none;
+      `;
+      
+      // Insert the feedback inline within the click text element
+      clickTextElement.appendChild(feedback);
+      
+      // Fade in the feedback
+      setTimeout(() => {
+        feedback.style.opacity = '1';
+      }, 10);
+      
+      // Remove the feedback after 3 seconds
+      setTimeout(() => {
+        feedback.style.opacity = '0';
+        setTimeout(() => {
+          if (feedback.parentNode) {
+            feedback.parentNode.removeChild(feedback);
+          }
+        }, 300);
+      }, 3000);
+    }
 
     function formatVariableName(name, searchTerms = []) {
       if (!name) return '';
       
       let formatted = name
+        .replace(/^Estimate!!\s*/, '')  // Remove "Estimate!!" prefix
         .replace(/!!/g, ' <span class="hierarchy-arrow">→</span> ')  // Replace !! with styled arrow
         .replace(/:/g, '')      // Remove trailing colons
         .trim();
@@ -1073,17 +925,17 @@ Tokens: <code>B01001</code> (totals), <code>B01001_003</code> (specific), <code>
       searchResults.innerHTML = '';
       
       if (results.length === 0) {
-        searchResults.innerHTML = '<div class="search-result-item" style="color: #5f6368; font-style: italic;">No variables found</div>';
+        searchResults.innerHTML = '<div class="search__result" style="color: #5f6368; font-style: italic;">No variables found</div>';
       } else {
         results.forEach(result => {
           const item = document.createElement('div');
-          item.className = 'search-result-item';
+          item.className = 'search__result';
           const formattedName = formatVariableName(result.name, searchTerms);
           const formattedConcept = formatVariableName(result.concept, searchTerms);
           item.innerHTML = `
-            <div class="search-result-id">${result.table_id}</div>
-            <div class="search-result-name">${formattedName}</div>
-            <div class="search-result-concept">${formattedConcept}</div>
+            <div class="search__result-id">${result.table_id}</div>
+            <div class="search__result-name">${formattedName}</div>
+            <div class="search__result-concept">${formattedConcept}</div>
           `;
           item.onclick = () => addTableId(result.table_id);
           searchResults.appendChild(item);
@@ -1115,7 +967,7 @@ Tokens: <code>B01001</code> (totals), <code>B01001_003</code> (specific), <code>
           
           if (data.error) {
             console.error('Search error:', data.error);
-            searchResults.innerHTML = '<div class="search-result-item" style="color: #c5221f;">Search error</div>';
+            searchResults.innerHTML = '<div class="search__result" style="color: #c5221f;">Search error</div>';
             searchResults.style.display = 'block';
           } else {
             displaySearchResults(data, searchTerms);
@@ -1126,7 +978,7 @@ Tokens: <code>B01001</code> (totals), <code>B01001_003</code> (specific), <code>
           searchSpinner.style.display = 'none';
           
           console.error('Search failed:', error);
-          searchResults.innerHTML = '<div class="search-result-item" style="color: #c5221f;">Search failed</div>';
+          searchResults.innerHTML = '<div class="search__result" style="color: #c5221f;">Search failed</div>';
           searchResults.style.display = 'block';
         });
     }
@@ -1156,52 +1008,157 @@ Tokens: <code>B01001</code> (totals), <code>B01001_003</code> (specific), <code>
     const chatgptInput = document.getElementById('chatgpt-question');
     const chatgptSpinner = document.getElementById('chatgpt-spinner');
     const chatgptConversation = document.getElementById('chatgpt-conversation');
-    const chatgptReplyContainer = document.getElementById('chatgpt-reply-container');
+    // chatgptReplyContainer removed - no longer needed
     const chatgptReplyInput = document.getElementById('chatgpt-reply');
     const chatgptReplySpinner = document.getElementById('chatgpt-reply-spinner');
     let chatgptTimeout;
     let chatgptReplyTimeout;
     let conversationHistory = [];
+    let isProcessing = false; // Flag to prevent duplicate requests
 
-    function addMessageToConversation(role, content, variables = []) {
+    function addMessageToConversation(role, content, variables = [], totalFound = 0, displayedCount = 0) {
       const messageDiv = document.createElement('div');
-      messageDiv.className = `chatgpt-message ${role}`;
+      messageDiv.className = `chat__message chat__message--${role}`;
       
-      const header = document.createElement('div');
-      header.className = 'chatgpt-message-header';
-      header.textContent = role === 'user' ? 'You' : 'ChatGPT';
-      messageDiv.appendChild(header);
+      // Create content wrapper for bubble styling
+      const contentWrapper = document.createElement('div');
+      contentWrapper.className = 'chat__message-content';
       
+      // Add the main content
       const responseDiv = document.createElement('div');
-      responseDiv.className = 'chatgpt-response';
+      responseDiv.className = 'chat__response';
       responseDiv.innerHTML = content;
-      messageDiv.appendChild(responseDiv);
+      contentWrapper.appendChild(responseDiv);
       
-      if (variables && variables.length > 0) {
+      // Add variables if present (only for assistant messages) - ChatGPT-like styling
+      if (role === 'assistant' && variables && variables.length > 0) {
         const variablesDiv = document.createElement('div');
-        variablesDiv.className = 'chatgpt-variables';
-        variablesDiv.innerHTML = `
-          <h4>Relevant Variables:</h4>
-          ${variables.map(variable => `
-            <div class="chatgpt-variable-item" onclick="addTableId('${variable.group}')">
-              <div class="chatgpt-variable-id">${variable.id}</div>
-              <div>${variable.name}</div>
-              <div style="color: #5f6368; font-size: 11px;">${variable.concept}</div>
-            </div>
-          `).join('')}
-        `;
-        messageDiv.appendChild(variablesDiv);
+        variablesDiv.className = 'chat__variables';
+        
+        // Create clean header
+        const variablesHeader = document.createElement('div');
+        variablesHeader.style.fontSize = '12px';
+        variablesHeader.style.color = '#6b7280';
+        variablesHeader.style.marginBottom = '8px';
+        variablesHeader.style.fontWeight = '500';
+        variablesHeader.textContent = `Relevant Variables (${totalFound} found)`;
+        variablesDiv.appendChild(variablesHeader);
+        
+        // Create clean variable list
+        const variableList = document.createElement('div');
+        variableList.style.display = 'flex';
+        variableList.style.flexDirection = 'column';
+        variableList.style.gap = '6px';
+        
+        variables.forEach(variable => {
+          const variableDiv = document.createElement('div');
+          variableDiv.style.padding = '8px 12px';
+          variableDiv.style.borderRadius = '8px';
+          variableDiv.style.backgroundColor = 'rgba(255,255,255,0.8)';
+          variableDiv.style.cursor = 'pointer';
+          variableDiv.style.transition = 'all 0.2s ease';
+          variableDiv.style.border = '1px solid rgba(0,0,0,0.05)';
+          
+          // Clean up the variable name
+          const cleanName = variable.name
+            .replace(/^Estimate!!\s*/, '')
+            .replace(/!!/g, ' → ')
+            .replace(/:/g, '')
+            .trim();
+          
+          variableDiv.innerHTML = `
+            <div style="font-weight: 600; color: #1d4ed8; font-family: 'SF Mono', monospace; font-size: 11px; margin-bottom: 2px;">${variable.id}</div>
+            <div style="color: #374151; font-size: 13px; line-height: 1.4; margin-bottom: 2px;">${cleanName}</div>
+            <div style="color: #6b7280; font-size: 11px;">${variable.concept}</div>
+          `;
+          
+          variableDiv.onclick = () => {
+            const tableId = variable.group;
+            console.log('Variable click - Table ID:', tableId);
+            if (tableId) {
+              addTableId(tableId, variableDiv);
+            }
+          };
+          
+          variableDiv.onmouseover = () => {
+            variableDiv.style.backgroundColor = 'rgba(255,255,255,1)';
+            variableDiv.style.borderColor = 'rgba(0,0,0,0.1)';
+            variableDiv.style.transform = 'translateY(-1px)';
+          };
+          
+          variableDiv.onmouseout = () => {
+            variableDiv.style.backgroundColor = 'rgba(255,255,255,0.8)';
+            variableDiv.style.borderColor = 'rgba(0,0,0,0.05)';
+            variableDiv.style.transform = 'translateY(0)';
+          };
+          
+          variableList.appendChild(variableDiv);
+        });
+        
+        variablesDiv.appendChild(variableList);
+        contentWrapper.appendChild(variablesDiv);
       }
       
+      messageDiv.appendChild(contentWrapper);
       chatgptConversation.appendChild(messageDiv);
-      chatgptConversation.scrollTop = chatgptConversation.scrollHeight;
+      
+      // Auto-scroll to bottom for all messages (ChatGPT-like behavior)
+      setTimeout(() => {
+        chatgptConversation.scrollTop = chatgptConversation.scrollHeight;
+      }, 100); // Small delay to ensure content is rendered
+    }
+
+    // Add event delegation for chat variable clicks
+    if (chatgptConversation) {
+      chatgptConversation.addEventListener('click', function(e) {
+        console.log('Chat conversation clicked:', e.target);
+        
+        // Check for variable items (in the Relevant Variables section)
+        const variableItem = e.target.closest('.chat__variable');
+        if (variableItem) {
+          const tableId = variableItem.getAttribute('data-table-id');
+          console.log('Variable item - Table ID:', tableId);
+          if (tableId) {
+            console.log('Calling addTableId with:', tableId);
+            addTableId(tableId, variableItem);
+          }
+          return;
+        }
+        
+        // Check for clickable variables in the response text
+        const clickableVariable = e.target.closest('.clickable-variable');
+        if (clickableVariable) {
+          const tableId = clickableVariable.getAttribute('data-table-id');
+          console.log('Clickable variable in text - Table ID:', tableId);
+          if (tableId) {
+            console.log('Calling addTableId with:', tableId);
+            addTableId(tableId, clickableVariable);
+          }
+          return;
+        }
+      });
     }
 
     function formatChatGPTResponse(answer, relevantVariables = []) {
       let formattedAnswer = answer;
       
+      // Convert markdown bold (**text**) to HTML bold
+      formattedAnswer = formattedAnswer.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
+      
+      // Replace " ### " with "."
+      formattedAnswer = formattedAnswer.replace(/\s###\s/g, '. ');
+      
       // Add line breaks after numbered solutions (1., 2., 3., etc.)
       formattedAnswer = formattedAnswer.replace(/(\d+\.\s[^<]*?)(?=\d+\.|$)/g, '$1<br><br>');
+      
+      // Add line breaks after bullet points
+      formattedAnswer = formattedAnswer.replace(/(•\s[^<]*?)(?=•|$)/g, '$1<br>');
+      
+      // Add line breaks after key phrases that indicate new sections
+      formattedAnswer = formattedAnswer.replace(/(Note:|Important:|Key insights:|Recommendations?:|Considerations?:)/g, '<br><br><strong>$1</strong>');
+      
+      // Add line breaks after sentences ending with periods followed by capital letters
+      formattedAnswer = formattedAnswer.replace(/(\.\s)([A-Z][a-z])/g, '$1<br><br>$2');
       
       // Extract variable IDs from the response and add them to variable names
       // Look for patterns like "variable name: `B19013_001E`" and enhance them
@@ -1209,7 +1166,13 @@ Tokens: <code>B01001</code> (totals), <code>B01001_003</code> (specific), <code>
         // Find the corresponding variable in relevant_variables
         const variable = relevantVariables.find(v => v.id === varId);
         if (variable) {
-          return `variable name: <strong>${varId}</strong> (${variable.name})`;
+          // Clean up the variable name by removing "Estimate" prefix and "!!" separators
+          let cleanName = variable.name
+            .replace(/^Estimate!!\s*/, '')  // Remove "Estimate!!" prefix
+            .replace(/!!/g, ' → ')          // Replace !! with clean arrow
+            .replace(/:/g, '')              // Remove trailing colons
+            .trim();
+          return `variable name: <strong>${varId}</strong> (${cleanName})`;
         }
         return `variable name: <strong>${varId}</strong>`;
       });
@@ -1220,20 +1183,37 @@ Tokens: <code>B01001</code> (totals), <code>B01001_003</code> (specific), <code>
       // And enhance shorter table IDs in backticks
       formattedAnswer = formattedAnswer.replace(/`([A-Z]\d+[A-Z]?\d*[A-Z]?)`/g, '<strong>$1</strong>');
       
+      // Make variable IDs in the text clickable (extract table ID from variable ID)
+      formattedAnswer = formattedAnswer.replace(/\b([A-Z]\d+[A-Z]?\d*[A-Z]?_\d+[A-Z]?)\b/g, (match, varId) => {
+        const tableId = varId.split('_')[0]; // Extract table ID (e.g., B19013D_001E -> B19013D)
+        return `<span class="clickable-variable" data-table-id="${tableId}" style="color: #1a73e8; cursor: pointer; text-decoration: underline;" title="Click to add ${tableId} to Table IDs">${varId}</span>`;
+      });
+      
       return formattedAnswer;
     }
 
     function askChatGPT(question, isReply = false) {
-      if (question.length < 3) {
-        if (!isReply) {
-          chatgptConversation.style.display = 'none';
-          chatgptReplyContainer.style.display = 'none';
-        }
+      // No character length restriction - let the AI handle clarification
+
+      // Prevent duplicate requests
+      if (isProcessing) {
         return;
       }
+      isProcessing = true;
 
       // Add user message to conversation
       addMessageToConversation('user', question);
+      
+      // Show thinking indicator
+      const thinkingIndicator = document.getElementById('chatgpt-thinking');
+      thinkingIndicator.style.display = 'block';
+      
+      // Set a timeout to hide thinking indicator if it gets stuck (10 seconds)
+      const thinkingTimeout = setTimeout(() => {
+        console.log('Thinking indicator timeout - hiding automatically');
+        thinkingIndicator.style.display = 'none';
+        isProcessing = false;
+      }, 10000);
       
       // Show spinner
       if (isReply) {
@@ -1242,9 +1222,8 @@ Tokens: <code>B01001</code> (totals), <code>B01001_003</code> (specific), <code>
         chatgptSpinner.style.display = 'block';
       }
       
-      // Show conversation and reply container
+      // Show conversation area
       chatgptConversation.style.display = 'block';
-      chatgptReplyContainer.style.display = 'block';
 
       // Add to conversation history
       conversationHistory.push({ role: 'user', content: question });
@@ -1259,9 +1238,22 @@ Tokens: <code>B01001</code> (totals), <code>B01001_003</code> (specific), <code>
           conversation_history: conversationHistory.slice(-10) // Send last 10 messages for context
         })
       })
-      .then(response => response.json())
+      .then(response => {
+        console.log('ChatGPT response received:', response.status);
+        return response.json();
+      })
       .then(data => {
-        // Hide spinner
+        console.log('ChatGPT data received:', data);
+        
+        // Clear the thinking timeout
+        clearTimeout(thinkingTimeout);
+        
+        // Hide thinking indicator and spinner
+        const thinkingIndicator = document.getElementById('chatgpt-thinking');
+        thinkingIndicator.style.display = 'none';
+        console.log('Thinking indicator hidden');
+        
+        // Hide all spinners
         if (isReply) {
           chatgptReplySpinner.style.display = 'none';
         } else {
@@ -1273,7 +1265,7 @@ Tokens: <code>B01001</code> (totals), <code>B01001_003</code> (specific), <code>
           addMessageToConversation('assistant', `<div style="color: #c5221f;">Error: ${data.error}</div>`);
         } else {
           const formattedAnswer = formatChatGPTResponse(data.answer, data.relevant_variables);
-          addMessageToConversation('assistant', formattedAnswer, data.relevant_variables);
+          addMessageToConversation('assistant', formattedAnswer, data.relevant_variables, data.total_found || 0, data.displayed_count || 0);
           
           // Add to conversation history
           conversationHistory.push({ role: 'assistant', content: data.answer });
@@ -1285,9 +1277,22 @@ Tokens: <code>B01001</code> (totals), <code>B01001_003</code> (specific), <code>
         } else {
           chatgptInput.value = '';
         }
+        
+        // Reset processing flag
+        isProcessing = false;
       })
       .catch(error => {
-        // Hide spinner
+        console.error('ChatGPT request failed:', error);
+        
+        // Clear the thinking timeout
+        clearTimeout(thinkingTimeout);
+        
+        // Hide thinking indicator and spinner
+        const thinkingIndicator = document.getElementById('chatgpt-thinking');
+        thinkingIndicator.style.display = 'none';
+        console.log('Thinking indicator hidden due to error');
+        
+        // Hide all spinners
         if (isReply) {
           chatgptReplySpinner.style.display = 'none';
         } else {
@@ -1296,29 +1301,19 @@ Tokens: <code>B01001</code> (totals), <code>B01001_003</code> (specific), <code>
         
         console.error('ChatGPT request failed:', error);
         addMessageToConversation('assistant', '<div style="color: #c5221f;">Request failed. Please try again.</div>');
+        
+        // Reset processing flag
+        isProcessing = false;
       });
     }
 
     // Set up ChatGPT input event listener
     if (chatgptInput) {
-      chatgptInput.addEventListener('input', function() {
-        clearTimeout(chatgptTimeout);
-        const question = this.value.trim();
-        
-        if (question.length >= 3) {
-          chatgptTimeout = setTimeout(() => askChatGPT(question, false), 1000);
-        } else {
-          chatgptConversation.style.display = 'none';
-          chatgptReplyContainer.style.display = 'none';
-        }
-      });
-
-      // Also trigger on Enter key
+      // Only trigger on Enter key - no automatic triggering
       chatgptInput.addEventListener('keypress', function(e) {
-        if (e.key === 'Enter') {
-          clearTimeout(chatgptTimeout);
+        if (e.key === 'Enter' && !isProcessing) {
           const question = this.value.trim();
-          if (question.length >= 3) {
+          if (question.length > 0) {
             askChatGPT(question, false);
           }
         }
@@ -1327,250 +1322,20 @@ Tokens: <code>B01001</code> (totals), <code>B01001_003</code> (specific), <code>
 
     // Set up ChatGPT reply input event listener
     if (chatgptReplyInput) {
-      chatgptReplyInput.addEventListener('input', function() {
-        clearTimeout(chatgptReplyTimeout);
-        const question = this.value.trim();
-        
-        if (question.length >= 3) {
-          chatgptReplyTimeout = setTimeout(() => askChatGPT(question, true), 1000);
-        }
-      });
-
-      // Also trigger on Enter key
+      // Only trigger on Enter key - no automatic triggering
       chatgptReplyInput.addEventListener('keypress', function(e) {
-        if (e.key === 'Enter') {
-          clearTimeout(chatgptReplyTimeout);
+        if (e.key === 'Enter' && !isProcessing) {
           const question = this.value.trim();
-          if (question.length >= 3) {
+          if (question.length > 0) {
             askChatGPT(question, true);
           }
         }
       });
     }
 
-    // Calculation functions
-    function updateCalculationOptions() {
-      console.log('updateCalculationOptions called');
-      const tablesInput = document.getElementById('tables');
-      if (!tablesInput) {
-        console.log('Tables input not found');
-        return;
-      }
-      
-      const tableIds = tablesInput.value.split(/[,\s]+/).filter(id => id.trim());
-      console.log('Table IDs found:', tableIds);
-      
-      // Get all table selection dropdowns
-      const numeratorTableSelects = document.querySelectorAll('.calc-numerator-table');
-      const denominatorTableSelects = document.querySelectorAll('.calc-denominator-table');
-      console.log('Found dropdowns - numerator tables:', numeratorTableSelects.length, 'denominator tables:', denominatorTableSelects.length);
-      
-      // Update table selection dropdowns
-      [...numeratorTableSelects, ...denominatorTableSelects].forEach(select => {
-        const currentValue = select.value;
-        const isNumerator = select.classList.contains('calc-numerator-table');
-        const placeholder = isNumerator ? 'Table 1' : 'Table 2';
-        
-        select.innerHTML = `<option value="">${placeholder}</option>`;
-        
-        tableIds.forEach(tableId => {
-          if (tableId.trim()) {
-            const option = document.createElement('option');
-            option.value = tableId.trim();
-            option.textContent = tableId.trim();
-            select.appendChild(option);
-          }
-        });
-        
-        console.log('Updated dropdown with', select.options.length, 'options');
-        
-        // Restore previous selection if it still exists
-        if (currentValue && tableIds.includes(currentValue)) {
-          select.value = currentValue;
-        }
-      });
-    }
+    // Calculation functions removed from frontend but kept in backend for future use
 
-    // Fetch variable details for a specific table
-    async function fetchTableVariables(tableId) {
-      try {
-        console.log('Fetching variables for table:', tableId);
-        const response = await fetch(`/api/search-variables?q=${encodeURIComponent(tableId)}&limit=100`);
-        const data = await response.json();
-        console.log('API response:', data);
-        // The API returns the array directly, not in a 'results' property
-        return Array.isArray(data) ? data : (data.results || []);
-      } catch (error) {
-        console.error('Error fetching table variables:', error);
-        return [];
-      }
-    }
-
-    // Handle table selection change
-    async function handleTableChange(tableSelect, type) {
-      console.log('handleTableChange called with type:', type, 'table:', tableSelect.value);
-      const variableSelect = tableSelect.parentElement.querySelector(`.calc-${type}-var`);
-      console.log('Found variable select:', variableSelect);
-      await updateVariableDropdown(tableSelect, variableSelect);
-    }
-
-    // Update variable dropdown when table is selected
-    async function updateVariableDropdown(tableSelect, variableSelect) {
-      const tableId = tableSelect.value;
-      const currentValue = variableSelect.value;
-      console.log('updateVariableDropdown called with tableId:', tableId);
-      
-      // Clear existing options
-      variableSelect.innerHTML = '<option value="">Select variable...</option>';
-      
-      if (tableId) {
-        // Show loading
-        variableSelect.innerHTML = '<option value="">Loading variables...</option>';
-        
-        // Fetch variables for this table
-        const variables = await fetchTableVariables(tableId);
-        console.log('Fetched variables:', variables);
-        
-        // Clear and add options
-        variableSelect.innerHTML = '<option value="">Select variable...</option>';
-        
-        variables.forEach(variable => {
-          const option = document.createElement('option');
-          option.value = variable.id;
-          const formattedName = variable.name.replace(/!!/g, ' → ').replace(/:/g, '').trim();
-          option.textContent = `${variable.id} - ${formattedName}`;
-          variableSelect.appendChild(option);
-        });
-        
-        console.log('Added', variables.length, 'variables to dropdown');
-        
-        // Restore previous selection if it still exists
-        if (currentValue) {
-          const matchingOption = Array.from(variableSelect.options).find(opt => opt.value === currentValue);
-          if (matchingOption) {
-            variableSelect.value = currentValue;
-          }
-        }
-      }
-    }
-
-    function addCalculation() {
-      const calculationsDiv = document.getElementById('calculations');
-      const newRow = document.createElement('div');
-      newRow.className = 'calculation-row';
-      newRow.innerHTML = 
-        '<div class="calc-line">' +
-          '<select class="calc-numerator-table" data-type="numerator">' +
-            '<option value="">Table 1</option>' +
-          '</select>' +
-          '<select class="calc-numerator-var">' +
-            '<option value="">Variable</option>' +
-          '</select>' +
-          '<select class="calc-operator">' +
-            '<option value="÷">÷</option>' +
-            '<option value="×">×</option>' +
-            '<option value="+">+</option>' +
-            '<option value="-">-</option>' +
-          '</select>' +
-        '</div>' +
-        '<div class="calc-line">' +
-          '<select class="calc-denominator-table" data-type="denominator">' +
-            '<option value="">Table 2</option>' +
-          '</select>' +
-          '<select class="calc-denominator-var">' +
-            '<option value="">Variable</option>' +
-          '</select>' +
-          '<span class="calc-equals">=</span>' +
-        '</div>' +
-        '<div class="calc-line">' +
-          '<input type="text" class="calc-name" placeholder="Calculation name (e.g., Percent of total)" maxlength="50">' +
-          '<button type="button" class="btn-remove-calc" onclick="removeCalculation(this)">Delete calculation</button>' +
-        '</div>';
-      
-      calculationsDiv.appendChild(newRow);
-      updateCalculationOptions();
-      
-      // Show remove buttons if there are multiple calculations
-      updateRemoveButtons();
-    }
-
-    function removeCalculation(button) {
-      button.closest('.calculation-row').remove();
-      updateRemoveButtons();
-    }
-
-    function updateRemoveButtons() {
-      const calculationRows = document.querySelectorAll('.calculation-row');
-      const removeButtons = document.querySelectorAll('.btn-remove-calc');
-      
-      removeButtons.forEach((button, index) => {
-        // First row (index 0) never shows remove button, others show when there are 2+ rows
-        button.style.display = (index === 0 || calculationRows.length <= 1) ? 'none' : 'block';
-      });
-    }
-
-    function getCalculations() {
-      const calculations = [];
-      const calculationRows = document.querySelectorAll('.calculation-row');
-      console.log('Found calculation rows:', calculationRows.length);
-      
-      calculationRows.forEach((row, index) => {
-        const numeratorVarSelect = row.querySelector('.calc-numerator-var');
-        const denominatorVarSelect = row.querySelector('.calc-denominator-var');
-        const operatorSelect = row.querySelector('.calc-operator');
-        const nameInput = row.querySelector('.calc-name');
-        
-        console.log(`Row ${index}:`, {
-          numerator: numeratorVarSelect ? numeratorVarSelect.value : 'not found',
-          denominator: denominatorVarSelect ? denominatorVarSelect.value : 'not found',
-          operator: operatorSelect ? operatorSelect.value : 'not found',
-          name: nameInput ? nameInput.value : 'not found'
-        });
-        
-        if (numeratorVarSelect && denominatorVarSelect && operatorSelect && nameInput) {
-          const numerator = numeratorVarSelect.value;
-          const denominator = denominatorVarSelect.value;
-          const operator = operatorSelect.value;
-          const name = nameInput.value;
-          
-          if (numerator && denominator && operator && name) {
-            calculations.push({
-              numerator: numerator,
-              denominator: denominator,
-              operator: operator,
-              name: name
-            });
-          }
-        }
-      });
-      
-      console.log('Calculations to send:', calculations);
-      return calculations;
-    }
-
-    // Add event listeners for table selection changes
-    document.addEventListener('change', function(event) {
-      console.log('Change event triggered on:', event.target.className);
-      if (event.target.classList.contains('calc-numerator-table') || event.target.classList.contains('calc-denominator-table')) {
-        console.log('Table selection change detected');
-        updateCalculationOptions();
-        const type = event.target.getAttribute('data-type');
-        handleTableChange(event.target, type);
-      }
-    });
-
-    // Add event listener for Table IDs field changes (including from search results)
-    document.addEventListener('input', function(event) {
-      if (event.target.id === 'tables') {
-        console.log('Table IDs field changed, updating calculation options');
-        updateCalculationOptions();
-      }
-    });
-    
-    // Initialize calculation options on page load
-    document.addEventListener('DOMContentLoaded', function() {
-      updateCalculationOptions();
-    });
+    // Calculation event listeners removed from frontend but kept in backend for future use
 
     async function download() {
       const years = document.getElementById('years')?.value;
@@ -1579,7 +1344,7 @@ Tokens: <code>B01001</code> (totals), <code>B01001_003</code> (specific), <code>
       const moe = document.getElementById('moe')?.value === 'true';
       const tables = document.getElementById('tables')?.value;
       const format = document.getElementById('format')?.value || 'zip';
-      const calculations = getCalculations();
+      const calculations = []; // Calculations removed from frontend
       const apikey = undefined; // Use default API key
 
       const msg = document.getElementById('msg');
@@ -1638,9 +1403,7 @@ Tokens: <code>B01001</code> (totals), <code>B01001_003</code> (specific), <code>
     }
 
     // Initialize calculation options on page load
-    document.addEventListener('DOMContentLoaded', function() {
-      updateCalculationOptions();
-    });
+    // Calculation initialization removed from frontend
   </script>
 </body>
 </html>
@@ -1656,4 +1419,6 @@ if __name__ == "__main__":
 # Render.com config health check
 @app.get("/healthz")
 def healthz():
+    return "ok", 200
+
     return "ok", 200

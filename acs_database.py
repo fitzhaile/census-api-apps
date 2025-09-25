@@ -78,7 +78,7 @@ class ACSDatabase:
         return count
     
     def search_variables(self, search_term: str, limit: int = 50) -> List[Tuple]:
-        """Search variables by name, concept, or ID"""
+        """Search variables by name, concept, or ID with smart prioritization"""
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
         
@@ -88,30 +88,64 @@ class ACSDatabase:
         if not words:
             return []
         
-        # Build query with AND conditions for each word
-        where_conditions = []
-        params = []
+        # First, try exact phrase matching for better relevance
+        exact_phrase = f'%{search_term}%'
         
-        for word in words:
-            word_pattern = f'%{word}%'
-            where_conditions.append('(name LIKE ? OR concept LIKE ? OR id LIKE ? OR group_name LIKE ?)')
-            params.extend([word_pattern, word_pattern, word_pattern, word_pattern])
-        
-        # Join all conditions with AND
-        where_clause = ' AND '.join(where_conditions)
-        
-        query = f'''
-            SELECT id, name, concept, group_name, year 
+        # Build simple query with smart prioritization
+        query = '''
+            SELECT id, name, concept, group_name, year
             FROM variables 
-            WHERE {where_clause}
-            ORDER BY name
+            WHERE name LIKE ? OR concept LIKE ? OR id LIKE ? OR group_name LIKE ?
+            ORDER BY 
+                CASE 
+                    WHEN name LIKE ? THEN 1  -- Exact phrase in name gets highest priority
+                    WHEN id LIKE ? THEN 2    -- Exact phrase in ID gets second priority
+                    WHEN concept LIKE ? THEN 3  -- Exact phrase in concept gets third priority
+                    ELSE 4  -- Other matches get lower priority
+                END, name
             LIMIT ?
         '''
         
-        params.append(limit)
+        params = [exact_phrase, exact_phrase, exact_phrase, exact_phrase, exact_phrase, exact_phrase, exact_phrase, limit]
         cursor.execute(query, params)
-        
         results = cursor.fetchall()
+        
+        # If we don't have enough results with exact phrase, try word-by-word matching
+        if len(results) < limit:
+            # Build simple word-by-word query
+            where_conditions = []
+            word_params = []
+            
+            for word in words:
+                word_pattern = f'%{word}%'
+                where_conditions.append('(name LIKE ? OR concept LIKE ? OR id LIKE ? OR group_name LIKE ?)')
+                word_params.extend([word_pattern, word_pattern, word_pattern, word_pattern])
+            
+            # Join all conditions with AND
+            where_clause = ' AND '.join(where_conditions)
+            
+            # Exclude results we already have
+            existing_ids = [result[0] for result in results]
+            if existing_ids:
+                placeholders = ','.join(['?' for _ in existing_ids])
+                where_clause += f' AND id NOT IN ({placeholders})'
+                word_params.extend(existing_ids)
+            
+            # Simple word query
+            word_query = f'''
+                SELECT id, name, concept, group_name, year
+                FROM variables 
+                WHERE {where_clause}
+                ORDER BY name
+                LIMIT ?
+            '''
+            
+            word_params.append(limit - len(results))
+            cursor.execute(word_query, word_params)
+            additional_results = cursor.fetchall()
+            
+            results.extend(additional_results)
+        
         conn.close()
         return results
     

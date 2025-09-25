@@ -1,0 +1,852 @@
+/* ==========================================================================
+   Census API App - BEM Methodology Stylesheet
+   ========================================================================== */
+
+/* ==========================================================================
+   Base Styles
+   ========================================================================== */
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  font-family: 'Google Sans', 'Roboto', Arial, sans-serif;
+  margin: 0;
+  padding: 0;
+  background: linear-gradient(135deg, #e3f2fd 0%, #f3e5f5 100%);
+  min-height: 100vh;
+  color: #202124;
+}
+
+/* ==========================================================================
+   Layout Blocks
+   ========================================================================== */
+
+/* Block: app */
+.app {
+  max-width: 920px;
+  margin: 40px auto;
+  padding: 0 24px;
+}
+
+/* Block: card */
+.card {
+  background: white;
+  border-radius: 8px;
+  box-shadow: 0 1px 3px rgba(60,64,67,0.3), 0 4px 8px 3px rgba(60,64,67,0.15);
+  padding: 48px 40px;
+  border: 1px solid #dadce0;
+  border-top: 4px solid #1a73e8;
+}
+
+/* ==========================================================================
+   Typography Blocks
+   ========================================================================== */
+
+/* Block: heading */
+.heading {
+  font-size: 32px;
+  font-weight: 400;
+  color: #202124;
+  margin: 0 0 8px 0;
+  text-align: center;
+  letter-spacing: 0;
+}
+
+.heading--primary {
+  font-size: 32px;
+}
+
+/* Block: subtitle */
+.subtitle {
+  color: #5f6368;
+  text-align: center;
+  margin: 0 0 40px 0;
+  line-height: 1.5;
+  font-size: 14px;
+}
+
+/* Block: code */
+.code {
+  background: #f1f3f4;
+  color: #c5221f;
+  padding: 2px 4px;
+  border-radius: 2px;
+  font-family: 'Roboto Mono', monospace;
+}
+
+/* ==========================================================================
+   Form Blocks
+   ========================================================================== */
+
+/* Element: form__group */
+.form__group {
+  margin-bottom: 24px;
+}
+
+/* Element: form__label */
+.form__label {
+  display: block;
+  font-weight: 600;
+  color: #5f6368;
+  margin-bottom: 8px;
+  font-size: 14px;
+  letter-spacing: 0.25px;
+}
+
+/* Element: form__input */
+.form__input {
+  width: 100%;
+  padding: 12px 16px;
+  border: 1px solid #dadce0;
+  border-radius: 4px;
+  font-size: 16px;
+  transition: border-color 0.2s ease;
+  background: white;
+  font-family: inherit;
+}
+
+.form__input:focus {
+  outline: none;
+  border-color: #1a73e8;
+  border-width: 2px;
+  padding: 11px 15px;
+}
+
+.form__input::placeholder {
+  color: #aaa; 
+}
+
+/* Element: form__select */
+.form__select {
+  width: 100%;
+  padding: 12px 16px;
+  padding-right: 40px;
+  border: 1px solid #dadce0;
+  border-radius: 4px;
+  font-size: 16px;
+  transition: border-color 0.2s ease;
+  background: white;
+  font-family: inherit;
+  background-image: url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath fill='none' stroke='%23666' stroke-linecap='round' stroke-linejoin='round' stroke-width='2' d='M2 5l6 6 6-6'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 12px center;
+  background-size: 16px;
+  appearance: none;
+}
+
+.form__select:focus {
+  outline: none;
+  border-color: #1a73e8;
+  border-width: 2px;
+  padding: 11px 15px;
+  padding-right: 39px;
+}
+
+/* Element: form__help */
+.form__help {
+  font-size: 12px;
+  color: #606265;
+  margin-top: 8px;
+  line-height: 1.4;
+}
+
+/* ==========================================================================
+   Calculation Blocks
+   ========================================================================== */
+
+/* Block: calculation */
+.calculation {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 12px;
+  padding: 12px;
+  border: 1px solid #e8eaed;
+  border-radius: 4px;
+  background: #f8f9fa;
+}
+
+/* Element: calculation__line */
+.calculation__line {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+/* Element: calculation__select */
+.calculation__select {
+  flex: 1;
+  margin: 0;
+  min-width: 120px;
+  width: 100%;
+  padding: 12px 16px;
+  border: 1px solid #dadce0;
+  border-radius: 4px;
+  font-size: 16px;
+  transition: border-color 0.2s ease;
+  background: white;
+  font-family: inherit;
+  padding-right: 40px;
+  background-image: url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath fill='none' stroke='%23666' stroke-linecap='round' stroke-linejoin='round' stroke-width='2' d='M2 5l6 6 6-6'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 12px center;
+  background-size: 16px;
+  appearance: none;
+}
+
+.calculation__select:focus {
+  outline: none;
+  border-color: #1a73e8;
+  border-width: 2px;
+  padding: 11px 15px;
+  padding-right: 39px;
+}
+
+/* Element: calculation__input */
+.calculation__input {
+  flex: 1.5;
+  margin: 0;
+  min-width: 120px;
+  width: 100%;
+  padding: 12px 16px;
+  border: 1px solid #dadce0;
+  border-radius: 4px;
+  font-size: 16px;
+  transition: border-color 0.2s ease;
+  background: white;
+  font-family: inherit;
+}
+
+.calculation__input:focus {
+  outline: none;
+  border-color: #1a73e8;
+  border-width: 2px;
+  padding: 11px 15px;
+}
+
+/* Element: calculation__operator */
+.calculation__operator {
+  font-weight: bold;
+  color: #5f6368;
+  font-size: 16px;
+  width: 60px !important;
+  min-width: 60px !important;
+  max-width: 60px !important;
+  text-align: center;
+  padding: 8px 22px 8px 0px !important;
+  flex-shrink: 0;
+}
+
+/* Element: calculation__equals */
+.calculation__equals {
+  font-weight: bold;
+  color: #5f6368;
+  font-size: 18px;
+}
+
+/* ==========================================================================
+   Button Blocks
+   ========================================================================== */
+
+/* Block: button */
+.button {
+  width: 100%;
+  background: #1a73e8;
+  color: white;
+  border: none;
+  padding: 12px 24px;
+  border-radius: 4px;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  margin-top: 16px;
+  text-transform: none;
+  letter-spacing: 0.25px;
+  font-family: inherit;
+}
+
+.button:hover {
+  background: #1557b0;
+  box-shadow: 0 1px 2px 0 rgba(60,64,67,0.3), 0 1px 3px 1px rgba(60,64,67,0.15);
+}
+
+.button:active {
+  background: #1557b0;
+  box-shadow: 0 1px 2px 0 rgba(60,64,67,0.3), 0 2px 6px 2px rgba(60,64,67,0.15);
+}
+
+/* Modifier: button--add */
+.button--add {
+  background: #4285f4;
+  color: white;
+  border: none;
+  padding: 8px 16px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 14px;
+  margin-top: 8px;
+  width: auto;
+}
+
+.button--add:hover {
+  background: #3367d6;
+}
+
+/* Modifier: button--remove */
+.button--remove {
+  background: #ea4335;
+  color: white;
+  border: 1px solid #ea4335;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 1;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin-left: 4px;
+  margin-top: 0px;
+  transition: all 0.2s ease;
+  padding: 13px 16px 14px 16px;
+  font-family: inherit;
+  white-space: nowrap;
+  width: auto;
+  vertical-align: top;
+  box-sizing: border-box;
+}
+
+.button--remove:hover {
+  background: #d33b2c;
+  transform: scale(1.05);
+}
+
+/* ==========================================================================
+   Layout Utilities
+   ========================================================================== */
+
+/* Block: row */
+.row {
+  display: flex;
+  gap: 16px;
+}
+
+.row .form__group {
+  flex: 1;
+}
+
+/* ==========================================================================
+   Progress Blocks
+   ========================================================================== */
+
+/* Block: progress */
+.progress {
+  margin-top: 24px;
+  height: 4px;
+  width: 100%;
+  background: #e8eaed;
+  border-radius: 2px;
+  overflow: hidden;
+  display: none;
+}
+
+/* Element: progress__bar */
+.progress__bar {
+  height: 100%;
+  width: 0%;
+  background: #1a73e8;
+  transition: width .3s ease;
+}
+
+/* Element: progress__text */
+.progress__text {
+  margin-top: 8px;
+  color: #5f6368;
+  font-size: 12px;
+  display: none;
+}
+
+/* Block: message */
+.message {
+  margin-top: 16px;
+  color: #5f6368;
+  font-size: 14px;
+}
+
+/* ==========================================================================
+   Search Blocks
+   ========================================================================== */
+
+/* Block: search */
+.search {
+  position: relative;
+}
+
+/* Element: search__spinner */
+.search__spinner {
+  position: absolute;
+  right: 12px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 16px;
+  height: 16px;
+  border: 2px solid #e8eaed;
+  border-top: 2px solid #1a73e8;
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
+  display: none;
+}
+
+@keyframes spin {
+  0% { transform: translateY(-50%) rotate(0deg); }
+  100% { transform: translateY(-50%) rotate(360deg); }
+}
+
+/* Element: search__results */
+.search__results {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
+  background: white;
+  border: 1px solid #dadce0;
+  border-top: none;
+  border-radius: 0 0 4px 4px;
+  max-height: 200px;
+  overflow-y: auto;
+  z-index: 1000;
+  display: none;
+  box-shadow: 0 2px 8px rgba(60,64,67,0.15);
+}
+
+/* Element: search__result */
+.search__result {
+  padding: 12px 16px;
+  cursor: pointer;
+  border-bottom: 1px solid #f1f3f4;
+  transition: background-color 0.2s ease;
+}
+
+.search__result:hover {
+  background-color: #f8f9fa;
+}
+
+.search__result:last-child {
+  border-bottom: none;
+}
+
+/* Element: search__result-id */
+.search__result-id {
+  font-weight: 600;
+  color: #1a73e8;
+  font-family: 'Roboto Mono', monospace;
+  font-size: 13px;
+}
+
+/* Element: search__result-name */
+.search__result-name {
+  color: #202124;
+  font-size: 14px;
+  margin: 2px 0;
+  line-height: 1.4;
+}
+
+.search__result-name .hierarchy-arrow {
+  color: #1a73e8;
+  font-weight: bold;
+  margin: 0 4px;
+}
+
+/* Element: search__result-concept */
+.search__result-concept {
+  color: #5f6368;
+  font-size: 12px;
+}
+
+.search__result-name strong,
+.search__result-concept strong {
+  color: #2d2d2d;
+  font-weight: 700;
+}
+
+/* ==========================================================================
+   Data Selection Container
+   ========================================================================== */
+
+/* Block: data-selection-container */
+.data-selection-container {
+  background: #ffffff;
+  border: 1px solid #e5e7eb;
+  border-radius: 12px;
+  padding: 20px;
+  margin: 16px 0;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+}
+
+/* Element: data-selection-header */
+.data-selection-header {
+  margin-bottom: 16px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid #f3f4f6;
+}
+
+/* Element: data-selection-title */
+.data-selection-title {
+  font-size: 18px;
+  font-weight: 600;
+  color: #111827;
+  margin: 0 0 4px 0;
+}
+
+/* Element: data-selection-subtitle */
+.data-selection-subtitle {
+  font-size: 14px;
+  color: #6b7280;
+  margin: 0;
+}
+
+/* ==========================================================================
+   ChatGPT Container
+   ========================================================================== */
+
+/* Block: chatgpt-container */
+.chatgpt-container {
+  background: #ffffff;
+  border: 1px solid #e5e7eb;
+  border-radius: 12px;
+  padding: 20px;
+  margin: 16px 0;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+}
+
+/* Element: chatgpt-header */
+.chatgpt-header {
+  margin-bottom: 16px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid #f3f4f6;
+}
+
+/* Element: chatgpt-title */
+.chatgpt-title {
+  font-size: 18px;
+  font-weight: 600;
+  color: #111827;
+  margin: 0 0 4px 0;
+}
+
+/* Element: chatgpt-subtitle */
+.chatgpt-subtitle {
+  font-size: 14px;
+  color: #6b7280;
+  margin: 0;
+}
+
+/* Element: chatgpt-input */
+.chatgpt-input {
+  position: relative;
+  margin-top: 16px;
+}
+
+/* Element: chatgpt-input-field */
+.chatgpt-input-field {
+  width: 100%;
+  padding: 12px 16px;
+  border: 1px solid #d1d5db;
+  border-radius: 8px;
+  font-size: 14px;
+  background: #ffffff;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.chatgpt-input-field:focus {
+  outline: none;
+  border-color: #3b82f6;
+  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
+}
+
+.chatgpt-input-field::placeholder {
+  color: #9ca3af;
+}
+
+/* Element: chatgpt-spinner */
+.chatgpt-spinner {
+  position: absolute;
+  right: 12px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 16px;
+  height: 16px;
+  border: 2px solid #e5e7eb;
+  border-top: 2px solid #3b82f6;
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
+  display: none;
+}
+
+/* ==========================================================================
+   ChatGPT Blocks
+   ========================================================================== */
+
+/* Block: chat - ChatGPT-like container */
+.chat {
+  margin-top: 16px;
+  max-height: 600px;
+  overflow-y: auto;
+  background: transparent;
+  border: none;
+  padding: 0;
+}
+
+/* Element: chat__message - ChatGPT-like message container */
+.chat__message {
+  padding: 16px 0;
+  display: flex;
+  align-items: flex-start;
+  width: 100%;
+}
+
+.chat__message:last-child {
+  padding-bottom: 24px;
+}
+
+/* Modifier: chat__message--user - Right-aligned user messages */
+.chat__message--user {
+  justify-content: flex-end;
+  padding-left: 60px;
+}
+
+.chat__message--user .chat__message-content {
+  background: #007bff;
+  color: white;
+  padding: 12px 16px;
+  border-radius: 18px 18px 4px 18px;
+  max-width: 65%;
+  word-wrap: break-word;
+  font-size: 14px;
+  line-height: 1.5;
+  box-shadow: 0 1px 2px rgba(0,0,0,0.1);
+}
+
+/* Modifier: chat__message--assistant - Left-aligned assistant messages */
+.chat__message--assistant {
+  justify-content: flex-start;
+  padding-right: 60px;
+}
+
+.chat__message--assistant .chat__message-content {
+  background: #f7f7f8;
+  color: #374151;
+  padding: 12px 16px;
+  border-radius: 18px 18px 18px 4px;
+  max-width: 80%;
+  word-wrap: break-word;
+  font-size: 14px;
+  line-height: 1.5;
+  border: 1px solid #e5e7eb;
+}
+
+/* Element: chat__message-header */
+.chat__message-header {
+  font-size: 12px;
+  color: #5f6368;
+  font-weight: 600;
+  margin-bottom: 6px;
+}
+
+/* Element: chat__response - Clean response text */
+.chat__response {
+  color: inherit;
+  font-size: inherit;
+  line-height: inherit;
+  margin: 0;
+  white-space: pre-wrap;
+}
+
+/* Improve bullet point spacing */
+.chat__response ul {
+  margin: 8px 0;
+  padding-left: 20px;
+}
+
+.chat__response li {
+  margin: 2px 0;
+  line-height: 1.4;
+}
+
+/* Element: chat__variables - ChatGPT-like variable display */
+.chat__variables {
+  border-top: 1px solid rgba(0,0,0,0.1);
+  padding-top: 12px;
+  margin-top: 12px;
+}
+
+.chat__variables h4 {
+  margin: 0 0 8px 0;
+  font-size: 13px;
+  color: #5f6368;
+  font-weight: 600;
+}
+
+/* Element: chat__variable */
+.chat__variable {
+  padding: 8px 12px;
+  margin: 4px 0;
+  background: #f8f9fa;
+  border: 1px solid #1a73e8;
+  border-radius: 4px;
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  position: relative;
+  text-decoration: none;
+  color: #1a73e8;
+}
+
+.chat__variable:hover {
+  background: #1a73e8;
+  color: white;
+  transform: translateY(-1px);
+  box-shadow: 0 2px 4px rgba(26, 115, 232, 0.3);
+  text-decoration: none;
+}
+
+.chat__variable:active {
+  transform: translateY(0);
+  box-shadow: 0 1px 2px rgba(26, 115, 232, 0.4);
+}
+
+.chat__variable:hover .chat__variable-id {
+  color: white;
+}
+
+.chat__variable:hover div {
+  color: white;
+}
+
+.chat__variable:hover div[style*="text-decoration: underline"] {
+  text-decoration: underline !important;
+}
+
+/* Element: chat__variable-id */
+.chat__variable-id {
+  font-weight: 600;
+  color: #1a73e8;
+  font-family: 'Roboto Mono', monospace;
+}
+
+/* Element: chat__reply */
+.chat__reply {
+  margin-top: 8px;
+}
+
+/* ==========================================================================
+   Responsive Design
+   ========================================================================== */
+
+@media (max-width: 600px) {
+  .app {
+    margin: 16px auto;
+    padding: 0 16px;
+  }
+  
+  .card {
+    padding: 24px 16px;
+  }
+  
+  .row {
+    flex-direction: column;
+    gap: 0;
+  }
+  
+  .heading--primary {
+    font-size: 24px;
+  }
+  
+  .subtitle {
+    white-space: pre-line;
+  }
+  
+  .form__select {
+    color: #202124;
+  }
+}
+
+/* ChatGPT Thinking Indicator */
+.chat__thinking {
+  background: #f8f9fa;
+  border: 1px solid #e8eaed;
+  border-radius: 8px;
+  padding: 16px;
+  margin: 8px 0;
+  text-align: center;
+}
+
+.chat__thinking-content {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+}
+
+.chat__thinking-spinner {
+  width: 20px;
+  height: 20px;
+  border: 2px solid #e8eaed;
+  border-top: 2px solid #1a73e8;
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
+}
+
+.chat__thinking-text {
+  color: #5f6368;
+  font-size: 14px;
+  font-weight: 500;
+}
+
+@keyframes spin {
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
+}
+
+/* Thinking Progress Dots */
+.chat__thinking-progress {
+  display: flex;
+  gap: 4px;
+  margin-left: 8px;
+}
+
+.chat__thinking-dot {
+  width: 6px;
+  height: 6px;
+  background: #1a73e8;
+  border-radius: 50%;
+  animation: thinking-dot 1.4s infinite ease-in-out;
+}
+
+.chat__thinking-dot:nth-child(1) {
+  animation-delay: -0.32s;
+}
+
+.chat__thinking-dot:nth-child(2) {
+  animation-delay: -0.16s;
+}
+
+.chat__thinking-dot:nth-child(3) {
+  animation-delay: 0s;
+}
+
+@keyframes thinking-dot {
+  0%, 80%, 100% {
+    transform: scale(0.8);
+    opacity: 0.5;
+  }
+  40% {
+    transform: scale(1.2);
+    opacity: 1;
+  }
+}
